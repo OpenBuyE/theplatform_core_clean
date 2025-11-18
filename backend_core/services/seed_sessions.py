@@ -2,14 +2,19 @@ from backend_core.services.session_repository import SessionRepository
 from backend_core.models.session import Session
 from datetime import datetime, timedelta
 
-
+# Repositorio único en toda la app
 repo = SessionRepository()
 
 
 def load_seed_sessions():
     """
-    Carga inicial de sesiones para demostrar el funcionamiento del dashboard.
+    Carga inicial de sesiones para demostrar el dashboard.
+    Solo se ejecuta una vez.
     """
+
+    # Evitar duplicados si ya hay datos cargados
+    if repo.get_all():
+        return repo
 
     sessions = [
         Session(operator_id="OP-A", supplier_id="SUP-101", amount=12000),
@@ -32,3 +37,8 @@ def load_seed_sessions():
         repo.add(s)
 
     return repo
+
+
+# Cargar automáticamente al importar
+load_seed_sessions()
+
