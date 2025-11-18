@@ -1,8 +1,6 @@
 import streamlit as st
-from backend_core.services.session_repository import SessionRepository
+from backend_core.services.seed_sessions import repo
 from backend_core.dashboard.ui.components import session_card
-
-repo = SessionRepository()  # repositorio en memoria temporal
 
 
 def render_park_sessions():
@@ -16,3 +14,4 @@ def render_park_sessions():
 
     for s in parked:
         session_card(s)
+
