@@ -1,8 +1,6 @@
 import streamlit as st
-from backend_core.services.session_repository import SessionRepository
+from backend_core.services.seed_sessions import repo
 from backend_core.dashboard.ui.components import session_card
-
-repo = SessionRepository()
 
 
 def render_active_sessions():
@@ -16,3 +14,4 @@ def render_active_sessions():
 
     for s in active:
         session_card(s)
+
