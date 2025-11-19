@@ -1,23 +1,18 @@
 import streamlit as st
-from backend_core.services.session_repository import SessionRepository
+from backend_core.services.session_repository import get_sessions
 
+def render():
+    st.header("🅿️ Parque de Sesiones")
 
-def render_park_sessions():
-    st.subheader("🅿️ Parque de Sesiones")
+    rows = get_sessions()
 
-    repo = SessionRepository()
-    sessions = repo.get_parked()
-
-    if not sessions:
-        st.info("No hay sesiones parked en Supabase.")
-        return
-
-    for s in sessions:
-        st.markdown(f"**ID:** {s.id}")
-        st.markdown(f"Producto: {s.product_id}")
-        st.markdown(f"Operador: {s.operator_code}")
-        st.markdown(f"Estado: `{s.status}`")
-        st.markdown(f"Importe: {s.amount} €")
+    for row in rows:
+        st.subheader(f"ID: {row['id']}")
+        st.write(f"**Operador:** {row.get('operator_code','-')}")
+        st.write(f"**Proveedor:** {row.get('product_id','-')}")
+        st.write(f"**Estado:** `{row.get('status','-')}`")
+        st.write(f"**Importe:** {row.get('amount',0)} €")
         st.markdown("---")
+
 
 
