@@ -3,7 +3,7 @@ from backend_core.services.supabase_client import fetch_rows
 
 def get_sessions() -> list[dict]:
     """
-    Sesiones en estado 'parked' (Parque de Sesiones).
+    Devuelve sesiones en estado 'parked' (Parque de Sesiones).
     """
     params = {
         "select": "*",
@@ -14,10 +14,10 @@ def get_sessions() -> list[dict]:
 
 def get_active_sessions() -> list[dict]:
     """
-    Sesiones en estado 'active', 'open' o 'running'
-    (ajusta los estados a lo que uses realmente).
+    Devuelve sesiones activas.
+    Estados usados: active, open, running.
+    (Ajusta los estados según tu lógica real).
     """
-    # PostgREST usa la sintaxis: campo=in.(valor1,valor2)
     params = {
         "select": "*",
         "status": "in.(active,open,running)",
@@ -27,13 +27,14 @@ def get_active_sessions() -> list[dict]:
 
 def get_chains() -> list[dict]:
     """
-    Sesiones que forman parte de una cadena (chain_group_id no nulo).
+    Devuelve sesiones que pertenecen a una cadena.
+    Se filtra por las que tienen chain_group_id no nulo.
     """
-    # Filtro 'is.not.null' en PostgREST
     params = {
         "select": "*",
-        "chain_group_id": "is.not.null",
+        "chain_group_id": "not.is.null",   # ✔️ Sintaxis correcta para Supabase REST
     }
     return fetch_rows("sessions", params)
+
 
 
