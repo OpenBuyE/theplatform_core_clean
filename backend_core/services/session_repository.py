@@ -1,9 +1,9 @@
-from backend_core.services.supabase_client import fetch_rows
+from backend_core.services.supabase_client import fetch_rows, update_row
 
 
 def get_sessions() -> list[dict]:
     """
-    Devuelve sesiones en estado 'parked' (Parque de Sesiones).
+    Sesiones en estado 'parked'
     """
     params = {
         "select": "*",
@@ -14,9 +14,7 @@ def get_sessions() -> list[dict]:
 
 def get_active_sessions() -> list[dict]:
     """
-    Devuelve sesiones activas.
-    Estados usados: active, open, running.
-    (Ajusta los estados según tu lógica real).
+    Sesiones en estado activo
     """
     params = {
         "select": "*",
@@ -27,14 +25,24 @@ def get_active_sessions() -> list[dict]:
 
 def get_chains() -> list[dict]:
     """
-    Devuelve sesiones que pertenecen a una cadena.
-    Se filtra por las que tienen chain_group_id no nulo.
+    Sesiones con cadena
     """
     params = {
         "select": "*",
-        "chain_group_id": "not.is.null",   # ✔️ Sintaxis correcta para Supabase REST
+        "chain_group_id": "is.not.null",
     }
     return fetch_rows("sessions", params)
+
+
+def activate_session(session_id: str) -> dict:
+    """
+    Cambia una sesión parked → active
+    """
+    patch = {
+        "status": "active"
+    }
+
+    return update_row("sessions", session_id, patch)
 
 
 
