@@ -1,32 +1,22 @@
 import streamlit as st
-
-
-def setup_page():
-    st.set_page_config(
-        page_title="Compra Abierta – Panel Operativo",
-        page_icon="🟢",
-        layout="wide"
-    )
-
-
-def render_header():
-    st.title("🟢 Compra Abierta – Panel Operativo")
-    st.markdown("---")
-
+from backend_core.services.organization_repository import list_organizations
 
 def render_sidebar():
-    st.sidebar.title("Navegación")
+    st.subheader("⚙️ Configuración")
 
-    choice = st.sidebar.radio(
-        "Selecciona vista:",
-        [
-            "Parque de Sesiones",
-            "Sesiones Activas",
-            "Cadenas"
-        ]
-    )
+    # --- Selector de organización ---
+    orgs = list_organizations()
 
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("© Operador Único — Compra Abierta 3.0")
+    if orgs:
+        org_names = {org["name"]: org["id"] for org in orgs}
 
-    return choice
+        selected = st.selectbox(
+            "Organización activa",
+            list(org_names.keys()),
+            key="selected_organization_name"
+        )
+
+        st.session_state["organization_id"] = org_names[selected]
+    else:
+        st.warning("No hay organizaciones registradas.")
+
