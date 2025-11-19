@@ -2,32 +2,28 @@ import streamlit as st
 
 from backend_core.services.supabase_client import fetch_rows, update_row
 from backend_core.services.audit_repository import log_action
+from backend_core.services.context import (
+    get_current_user,
+    get_current_org,
+    get_current_permissions
+)
 
 
-def _get_current_user() -> str:
+def _require_org_or_empty() -> str | None:
     """
-    Identifica al usuario actual.
-    De momento usamos un identificador simple en el panel.
-    En el SaaS futuro esto vendrá del sistema de autenticación.
+    Devuelve organization_id si existe.
+    Si no, muestra advertencia y devuelve None → devolvemos lista vacía.
     """
-    return st.session_state.get("current_user", "panel_operator")
-
-
-def _get_current_org_id() -> str | None:
-    """
-    Devuelve la organización activa desde la sesión de Streamlit.
-    Es la base del multi-tenant: todas las queries irán filtradas por esto.
-    """
-    return st.session_state.get("organization_id")
+    org_id = get_current_org()
+    if not org_id:
+        st.warning("Selecciona una organización para continuar.")
+        return None
+    return org_id
 
 
 def get_sessions() -> list[dict]:
-    """
-    Devuelve las sesiones en estado 'parked' de la organización activa.
-    """
-    org_id = _get_current_org_id()
+    org_id = _require_org_or_empty()
     if not org_id:
-        st.warning("Selecciona una organización para ver el parque de sesiones.")
         return []
 
     params = {
@@ -39,13 +35,8 @@ def get_sessions() -> list[dict]:
 
 
 def get_active_sessions() -> list[dict]:
-    """
-    Devuelve las sesiones activas de la organización activa.
-    Consideramos activos: active, open, running.
-    """
-    org_id = _get_current_org_id()
+    org_id = _require_org_or_empty()
     if not org_id:
-        st.warning("Selecciona una organización para ver las sesiones activas.")
         return []
 
     params = {
@@ -57,13 +48,8 @@ def get_active_sessions() -> list[dict]:
 
 
 def get_chains() -> list[dict]:
-    """
-    Devuelve las sesiones con cadena operativa asociada
-    (chain_group_id no nulo) de la organización activa.
-    """
-    org_id = _get_current_org_id()
+    org_id = _require_org_or_empty()
     if not org_id:
-        st.warning("Selecciona una organización para ver las cadenas operativas.")
         return []
 
     params = {
@@ -75,41 +61,36 @@ def get_chains() -> list[dict]:
 
 
 def activate_session(session_id: str) -> dict:
-    """
-    Cambia una sesión a estado 'active' y registra auditoría.
+    org_id = get_current_org()
+    user_id = get_current_user()
 
-    Multi-tenant:
-    - La sesión se actualiza (status + opcionalmente organization_id)
-    - Se registra log en audit_logs ligado a la misma organización
-    """
-    org_id = _get_current_org_id()
     if not org_id:
-        raise RuntimeError(
-            "No hay organización activa. "
-            "Selecciona una organización antes de activar sesiones."
-        )
+        raise RuntimeError("No hay organización activa.")
+    if not user_id:
+        raise RuntimeError("No hay usuario activo.")
+    if "session.activate" not in get_current_permissions():
+        raise RuntimeError("No tienes permisos para activar sesiones.")
 
     patch = {
         "status": "active",
-        # Opcional pero recomendable: asegurar que la sesión quede ligada a esta organización
         "organization_id": org_id,
     }
 
     updated = update_row("sessions", session_id, patch)
 
     if updated is None:
-        # Esto será capturado por el try/except en la vista
         raise RuntimeError("No se pudo actualizar la sesión en Supabase.")
 
-    # Registrar auditoría
+    # Registro de auditoría
     log_action(
         action="activate_session",
         session_id=session_id,
-        performed_by=_get_current_user(),
-        metadata={"new_status": "active"},
+        performed_by=user_id,
+        metadata={"new_status": "active"}
     )
 
     return updated
+
 
 
 
