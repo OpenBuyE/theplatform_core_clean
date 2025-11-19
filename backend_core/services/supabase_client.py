@@ -1,30 +1,23 @@
+import os
 import requests
 import streamlit as st
 
-# Leemos URL y clave de Supabase desde los secrets de Streamlit
-SUPABASE_URL = st.secrets["SUPABASE_URL"].rstrip("/")
-SUPABASE_SERVICE_ROLE = st.secrets["SUPABASE_SERVICE_ROLE"]
-
-BASE_REST_URL = f"{SUPABASE_URL}/rest/v1"
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_SERVICE_ROLE"]
 
 
-def fetch_rows(table: str, params: dict) -> list[dict]:
+def fetch_rows(table: str, params: dict) -> list:
     """
-    Llama a la REST API de Supabase y devuelve una lista de filas (dict).
+    GET /table?param=value
     """
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
     headers = {
-        "apikey": SUPABASE_SERVICE_ROLE,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE}",
-        "Content-Type": "application/json",
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
     }
 
-    resp = requests.get(
-        f"{BASE_REST_URL}/{table}",
-        headers=headers,
-        params=params,
-        timeout=10,
-    )
-    resp.raise_for_status()
-    return resp.json()
+    resp = requests.get(url, headers=headers, params=params)
+    resp.raise_for
+
 
 
