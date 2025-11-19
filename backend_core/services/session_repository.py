@@ -14,7 +14,7 @@ def get_sessions() -> list[dict]:
 
 def get_active_sessions() -> list[dict]:
     """
-    Sesiones en estado activo
+    Sesiones activas
     """
     params = {
         "select": "*",
@@ -25,7 +25,7 @@ def get_active_sessions() -> list[dict]:
 
 def get_chains() -> list[dict]:
     """
-    Sesiones con cadena
+    Sesiones que forman parte de una cadena
     """
     params = {
         "select": "*",
@@ -34,15 +34,9 @@ def get_chains() -> list[dict]:
     return fetch_rows("sessions", params)
 
 
-def activate_session(session_id: str) -> dict:
+def activate_session(session_id: str):
     """
-    Cambia una sesión parked → active
+    Activar sesión (UPDATE status = 'active')
     """
-    patch = {
-        "status": "active"
-    }
-
-    return update_row("sessions", session_id, patch)
-
-
+    return update_row("sessions", session_id, {"status": "active"})
 
