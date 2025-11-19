@@ -1,49 +1,43 @@
-from typing import List, Optional
-from datetime import datetime
-from backend_core.models.session import Session
+from dataclasses import dataclass
+from typing import List
+from backend_core.services.supabase_client import SupabaseREST
+
+
+@dataclass
+class SessionRecord:
+    id: str
+    product_id: str
+    operator_code: str
+    amount: float
+    status: str
 
 
 class SessionRepository:
-    """
-    Repositorio en memoria para gestionar sesiones.
-    Luego se reemplazará por Supabase.
-    """
+    TABLE = "sessions"
 
     def __init__(self):
-        self.sessions: List[Session] = []
+        self.client = SupabaseREST()
 
-    def add(self, session: Session):
-        self.sessions.append(session)
+    def get_by_status(self, status: str) -> List[SessionRecord]:
+        rows = self.client.select(
+            self.TABLE,
+            filters=f"status=eq.{status}"
+        )
 
-    def get_all(self) -> List[Session]:
-        return list(self.sessions)
+        return [
+            SessionRecord(
+                id=row["id"],
+                product_id=row["product_id"],
+                operator_code=row["operator_code"],
+                amount=float(row["amount"]),
+                status=row["status"]
+            )
+            for row in rows
+        ]
 
-    def get_by_id(self, session_id: str) -> Optional[Session]:
-        return next((s for s in self.sessions if s.id == session_id), None)
+    def get_parked(self):
+        return self.get_by_status("parked")
 
-    def get_by_status(self, status: str) -> List[Session]:
-        return [s for s in self.sessions if s.status == status]
+    def get_active(self):
+        return self.get_by_status("active")
 
-    def activate(self, session_id: str) -> bool:
-        session = self.get_by_id(session_id)
-        if not session:
-            return False
-        session.status = "active"
-        session.activated_at = datetime.utcnow()
-        return True
-
-    def schedule(self, session_id: str, when: datetime) -> bool:
-        session = self.get_by_id(session_id)
-        if not session:
-            return False
-        session.status = "scheduled"
-        session.scheduled_for = when
-        return True
-
-    def close(self, session_id: str) -> bool:
-        session = self.get_by_id(session_id)
-        if not session:
-            return False
-        session.status = "closed"
-        session.closed_at = datetime.utcnow()
-        return True
