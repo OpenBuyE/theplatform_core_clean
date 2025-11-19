@@ -17,9 +17,7 @@ def _headers():
 def log_action(action: str, session_id: str, performed_by: str, metadata: dict | None = None):
     """
     Inserta un registro de auditoría en Supabase.
-    Nunca rompe el panel si falla: muestra error y continúa.
     """
-
     url = f"{SUPABASE_URL}/rest/v1/audit_logs"
     headers = _headers()
 
@@ -27,7 +25,7 @@ def log_action(action: str, session_id: str, performed_by: str, metadata: dict |
         "action": action,
         "session_id": session_id,
         "performed_by": performed_by,
-        "metadata": metadata or {}
+        "metadata": metadata or {},
     }
 
     try:
@@ -35,12 +33,40 @@ def log_action(action: str, session_id: str, performed_by: str, metadata: dict |
 
         if not resp.ok:
             st.error(f"[AUDIT] Error al registrar auditoría ({resp.status_code}).")
-            # st.write(resp.text)
             return None
 
         data = resp.json()
         return data[0] if isinstance(data, list) else data
 
     except Exception as e:
-        st.error(f"[AUDIT] No se pudo registrar auditoría: {e}")
+        st.error(f"[AUDIT] Error al registrar auditoría: {e}")
         return None
+
+
+def fetch_logs() -> list[dict]:
+    """
+    Lee todos los registros de la tabla audit_logs de Supabase.
+    Nunca revienta el panel.
+    """
+    url = f"{SUPABASE_URL}/rest/v1/audit_logs"
+    headers = _headers()
+
+    params = {
+        "select": "*",
+        "order": "performed_at.desc",
+    }
+
+    try:
+        resp = requests.get(url, headers=headers, params=params, timeout=10)
+
+        if not resp.ok:
+            st.error(f"[AUDIT] Error al leer auditoría ({resp.status_code})")
+            return []
+
+        data = resp.json()
+        return data if isinstance(data, list) else []
+
+    except Exception as e:
+        st.error(f"[AUDIT] No se pudo conectar para leer auditoría: {e}")
+        return []
+
