@@ -1,33 +1,51 @@
 import os
-from functools import lru_cache
-
-from supabase import create_client, Client
+import requests
 
 
-def _get_supabase_url_and_key() -> tuple[str, str]:
-    """
-    Lee la configuración de Supabase desde variables de entorno.
+class SupabaseREST:
+    def __init__(self):
+        self.url = os.getenv("SUPABASE_URL")
+        self.key = os.getenv("SUPABASE_ANON_KEY")
 
-    En Streamlit Cloud configuraremos:
-      SUPABASE_URL
-      SUPABASE_ANON_KEY
+        if not self.url or not self.key:
+            raise RuntimeError(
+                "Falta SUPABASE_URL o SUPABASE_ANON_KEY en los secrets."
+            )
 
-    (Más adelante, si quieres, podemos añadir soporte para SERVICE_ROLE_KEY).
-    """
-    url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_ANON_KEY")
+        self.base = f"{self.url}/rest/v1"
 
-    if not url or not key:
-        raise RuntimeError(
-            "Supabase no está configurado. "
-            "Asegúrate de definir SUPABASE_URL y SUPABASE_ANON_KEY en el entorno."
-        )
+        self.headers = {
+            "apikey": self.key,
+            "Authorization": f"Bearer {self.key}",
+            "Content-Type": "application/json",
+        }
 
-    return url, key
+    def select(self, table: str, filters: str = ""):
+        url = f"{self.base}/{table}?{filters}"
 
+        response = requests.get(url, headers=self.headers)
 
-@lru_cache(maxsize=1)
-def get_supabase_client() -> Client:
-    """Devuelve un cliente Supabase cacheado (singleton sencillo)."""
-    url, key = _get_supabase_url_and_key()
-    return create_client(url, key)
+        if not response.ok:
+            raise RuntimeError(f"Error Supabase: {response.text}")
+
+        return response.json()
+
+    def insert(self, table: str, json_data: dict):
+        url = f"{self.base}/{table}"
+
+        response = requests.post(url, headers=self.headers, json=json_data)
+
+        if not response.ok:
+            raise RuntimeError(f"Error insertando: {response.text}")
+
+        return response.json()
+
+    def update(self, table: str, json_data: dict, filters: str):
+        url = f"{self.base}/{table}?{filters}"
+
+        response = requests.patch(url, headers=self.headers, json=json_data)
+
+        if not response.ok:
+            raise RuntimeError(f"Error actualizando: {response.text}")
+
+        return response.json()
