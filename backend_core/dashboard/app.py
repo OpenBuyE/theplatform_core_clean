@@ -1,11 +1,15 @@
 import streamlit as st
 
+from backend_core.dashboard.views.login import render_login
+from backend_core.services.session_manager import is_logged_in, logout
+
+# Componentes UI
 from backend_core.dashboard.ui.layout import (
     render_app_header,
-    render_sidebar
+    render_sidebar,
 )
 
-# Vistas
+# Vistas operativas
 from backend_core.dashboard.views.park_sessions import render_park_sessions
 from backend_core.dashboard.views.active_sessions import render_active_sessions
 from backend_core.dashboard.views.chains import render_chains
@@ -13,19 +17,45 @@ from backend_core.dashboard.views.audit_logs import render_audit_logs
 
 
 def main():
-    # ---- Configuración general ----
+    # ---------------------------------------------------
+    #   Configuración general de Streamlit
+    # ---------------------------------------------------
     st.set_page_config(
         page_title="Compra Abierta – Panel Operativo",
         page_icon="🛒",
         layout="wide",
-        initial_sidebar_state="expanded"
+        initial_sidebar_state="expanded",
     )
 
-    # ---- Encabezado superior ----
+    # ---------------------------------------------------
+    #   1) Si NO hay login → mostrar pantalla de login
+    # ---------------------------------------------------
+    if not is_logged_in():
+        render_login()
+        return
+
+    # ---------------------------------------------------
+    #   2) Si hay login → mostrar header + panel operativo
+    # ---------------------------------------------------
     render_app_header()
 
-    # ---- Sidebar (menú) ----
-    st.sidebar.title("📊 Panel Operativo")
+    # -------------- SIDEBAR CON LOGIN -------------------
+    st.sidebar.markdown("### 👤 Usuario")
+
+    user_email = st.session_state.get("user_email", "desconocido")
+    st.sidebar.info(f"Conectado como:\n**{user_email}**")
+
+    if st.sidebar.button("Cerrar sesión"):
+        logout()
+        st.experimental_rerun()
+
+    st.sidebar.markdown("---")
+
+    # -------------- SIDEBAR DE ORGANIZACIÓN --------------
+    render_sidebar()
+
+    # -------------- MENU PRINCIPAL -----------------------
+    st.sidebar.title("📊 Navegación")
 
     page = st.sidebar.selectbox(
         "Selecciona vista",
@@ -33,30 +63,10 @@ def main():
             "Parque de Sesiones",
             "Sesiones Activas",
             "Cadenas Operativas",
-            "Auditoría"
+            "Auditoría",
         ],
     )
 
-    st.sidebar.markdown("---")
-    render_sidebar()
-
-    # ---- Router de vistas ----
-    if page == "Parque de Sesiones":
-        render_park_sessions()
-
-    elif page == "Sesiones Activas":
-        render_active_sessions()
-
-    elif page == "Cadenas Operativas":
-        render_chains()
-
-    elif page == "Auditoría":
-        render_audit_logs()
-
-
-# Punto de entrada
-if __name__ == "__main__":
-    main()
-
+    # --------------------------
 
 
