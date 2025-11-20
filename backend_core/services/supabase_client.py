@@ -1,6 +1,9 @@
 """
 supabase_client.py
-Cliente Supabase vía REST (compatible con Python 3.13 y Streamlit Cloud)
+Cliente HTTP para Supabase totalmente compatible con Python 3.13,
+Streamlit Cloud y sin requerir el SDK oficial.
+
+Realiza llamadas directas a la REST API oficial de Supabase.
 """
 
 import os
@@ -10,51 +13,46 @@ from dotenv import load_dotenv
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")  # ANON KEY !!!
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
-    raise RuntimeError("SUPABASE_URL y SUPABASE_KEY deben estar definidas.")
+    raise RuntimeError("SUPABASE_URL y SUPABASE_KEY deben estar configurados.")
 
-# URL base REST (PostgREST)
-REST_URL = f"{SUPABASE_URL}/rest/v1"
 
-# Cabeceras standard
-HEADERS = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json"
-}
+class SupabaseHTTPClient:
+    def __init__(self):
+        self.base_url = f"{SUPABASE_URL}/rest/v1"
+        self.headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+        }
 
-class SupabaseREST:
+    def select(self, table, filters=""):
+        url = f"{self.base_url}/{table}?{filters}"
+        r = requests.get(url, headers=self.headers)
+        r.raise_for_status()
+        return r.json()
 
-    # SELECT
-    def select(self, table, params=None):
-        url = f"{REST_URL}/{table}"
-        res = requests.get(url, headers=HEADERS, params=params)
-        res.raise_for_status()
-        return res.json()
-
-    # INSERT
     def insert(self, table, data):
-        url = f"{REST_URL}/{table}"
-        res = requests.post(url, headers=HEADERS, json=data)
-        res.raise_for_status()
-        return res.json()
+        url = f"{self.base_url}/{table}"
+        r = requests.post(url, json=data, headers=self.headers)
+        r.raise_for_status()
+        return r.json()
 
-    # UPDATE
-    def update(self, table, match, data):
-        url = f"{REST_URL}/{table}"
-        params = {"select": "*", **match}
-        res = requests.patch(url, headers=HEADERS, params=params, json=data)
-        res.raise_for_status()
-        return res.json()
+    def update(self, table, filters, data):
+        url = f"{self.base_url}/{table}?{filters}"
+        r = requests.patch(url, json=data, headers=self.headers)
+        r.raise_for_status()
+        return r.json()
 
-    # DELETE
-    def delete(self, table, match):
-        url = f"{REST_URL}/{table}"
-        res = requests.delete(url, headers=HEADERS, params=match)
-        res.raise_for_status()
-        return res.json()
+    def delete(self, table, filters):
+        url = f"{self.base_url}/{table}?{filters}"
+        r = requests.delete(url, headers=self.headers)
+        r.raise_for_status()
+        return True
 
-# Instancia global para usar en repositorios
-supabase = SupabaseREST()
+
+# Cliente global
+supabase = SupabaseHTTPClient()
+
