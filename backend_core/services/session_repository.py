@@ -1,195 +1,261 @@
-import streamlit as st
+"""
+session_repository.py
+Repositorio de sesiones para Compra Abierta.
 
-from backend_core.services.supabase_client import fetch_rows, update_row
-from backend_core.services.audit_repository import log_action
-from backend_core.services.context import (
-    get_current_user,
-    get_current_org,
-    get_current_permissions,
-)
+Responsabilidades:
+- Obtener sesiones por estado, serie, organización
+- Obtener una sesión por id
+- Marcar sesiones como finished (con o sin adjudicación)
+- Incrementar pax_registered
+- Listar sesiones activas y expiradas
+- Activar sesiones (parked -> active)
+"""
 
+from datetime import datetime, timedelta
+from typing import List, Dict, Optional
 
-def _require_org_or_empty() -> str | None:
-    """
-    Devuelve organization_id si existe.
-    Si no, muestra advertencia y devuelve None → las funciones devuelven [].
-    """
-    org_id = get_current_org()
-    if not org_id:
-        st.warning("Selecciona una organización para continuar.")
-        return None
-    return org_id
+from .supabase_client import supabase
+from .audit_repository import log_event
 
 
-# -------------------------------------------------
-#   PARQUE / SESIONES ACTIVAS / CADENAS (EXISTENTE)
-# -------------------------------------------------
-
-def get_sessions() -> list[dict]:
-    """
-    Sesiones en estado 'parked' de la organización activa.
-    Esto corresponde al Parque de Sesiones.
-    """
-    org_id = _require_org_or_empty()
-    if not org_id:
-        return []
-
-    params = {
-        "select": "*",
-        "status": "eq.parked",
-        "organization_id": f"eq.{org_id}",
-    }
-    return fetch_rows("sessions", params)
+SESSION_TABLE = "sessions"
 
 
-def get_active_sessions() -> list[dict]:
-    """
-    Sesiones activas (active, open, running) de la organización activa.
-    """
-    org_id = _require_org_or_empty()
-    if not org_id:
-        return []
+class SessionRepository:
 
-    params = {
-        "select": "*",
-        "status": "in.(active,open,running)",
-        "organization_id": f"eq.{org_id}",
-    }
-    return fetch_rows("sessions", params)
+    # ---------------------------------------------------------
+    #  Obtener una sesión por ID
+    # ---------------------------------------------------------
+    def get_session_by_id(self, session_id: str) -> Optional[Dict]:
+        response = (
+            supabase
+            .table(SESSION_TABLE)
+            .select("*")
+            .eq("id", session_id)
+            .maybe_single()
+            .execute()
+        )
+        return response.data
+
+    # ---------------------------------------------------------
+    #  Obtener lista de sesiones (para panel, filtros básicos)
+    # ---------------------------------------------------------
+    def get_sessions(
+        self,
+        status: Optional[str] = None,
+        organization_id: Optional[str] = None,
+        series_id: Optional[str] = None,
+        limit: int = 200
+    ) -> List[Dict]:
+        query = supabase.table(SESSION_TABLE).select("*")
+
+        if status:
+            query = query.eq("status", status)
+        if organization_id:
+            query = query.eq("organization_id", organization_id)
+        if series_id:
+            query = query.eq("series_id", series_id)
+
+        query = query.order("created_at", desc=True).limit(limit)
+
+        response = query.execute()
+        return response.data or []
+
+    # ---------------------------------------------------------
+    #  Obtener sesiones parked
+    # ---------------------------------------------------------
+    def get_parked_sessions(
+        self,
+        organization_id: Optional[str] = None,
+        series_id: Optional[str] = None,
+        limit: int = 200
+    ) -> List[Dict]:
+        return self.get_sessions(
+            status="parked",
+            organization_id=organization_id,
+            series_id=series_id,
+            limit=limit,
+        )
+
+    # ---------------------------------------------------------
+    #  Activar una sesión (parked -> active)
+    # ---------------------------------------------------------
+    def activate_session(
+        self,
+        session_id: str,
+        expires_at: Optional[str] = None
+    ) -> Optional[Dict]:
+        """
+        Activa una sesión parked.
+        Si no se pasa expires_at, se asume ventana de 5 días desde ahora (lado backend).
+        """
+        now = datetime.utcnow()
+        if expires_at is None:
+            expires_dt = now + timedelta(days=5)
+            expires_at = expires_dt.isoformat()
+
+        response = (
+            supabase
+            .table(SESSION_TABLE)
+            .update({
+                "status": "active",
+                "activated_at": now.isoformat(),
+                "expires_at": expires_at,
+            })
+            .eq("id", session_id)
+            .execute()
+        )
+
+        data = response.data[0] if response.data else None
+
+        log_event(
+            action="session_activated",
+            session_id=session_id,
+            metadata={"expires_at": expires_at}
+        )
+
+        return data
+
+    # ---------------------------------------------------------
+    #  Marcar sesión como finished (con adjudicación)
+    # ---------------------------------------------------------
+    def mark_session_as_finished(self, session_id: str, finished_at: str) -> None:
+        (
+            supabase
+            .table(SESSION_TABLE)
+            .update({
+                "status": "finished",
+                "finished_at": finished_at
+            })
+            .eq("id", session_id)
+            .execute()
+        )
+
+        log_event(
+            action="session_marked_finished",
+            session_id=session_id,
+            metadata={"finished_at": finished_at}
+        )
+
+    # ---------------------------------------------------------
+    #  Marcar sesión como finished SIN adjudicación (expirada)
+    # ---------------------------------------------------------
+    def mark_session_as_finished_without_award(self, session_id: str, finished_at: str) -> None:
+        (
+            supabase
+            .table(SESSION_TABLE)
+            .update({
+                "status": "finished",
+                "finished_at": finished_at
+            })
+            .eq("id", session_id)
+            .execute()
+        )
+
+        log_event(
+            action="session_marked_finished_without_award",
+            session_id=session_id,
+            metadata={"finished_at": finished_at}
+        )
+
+    # ---------------------------------------------------------
+    #  Incrementar pax_registered (cuando entra un participante)
+    # ---------------------------------------------------------
+    def increment_pax_registered(self, session_id: str) -> None:
+        """
+        Incrementa pax_registered de la sesión en 1.
+
+        Nota: este método hace:
+        - lee la sesión
+        - suma 1
+        - guarda el valor
+
+        En entornos de alta concurrencia lo ideal sería una función SQL atómica,
+        pero para el estado actual del proyecto es suficiente.
+        """
+        session = self.get_session_by_id(session_id)
+        if not session:
+            log_event(
+                action="increment_pax_error_session_not_found",
+                session_id=session_id
+            )
+            return
+
+        current = session.get("pax_registered", 0)
+        new_value = current + 1
+
+        (
+            supabase
+            .table(SESSION_TABLE)
+            .update({"pax_registered": new_value})
+            .eq("id", session_id)
+            .execute()
+        )
+
+        log_event(
+            action="pax_registered_incremented",
+            session_id=session_id,
+            metadata={
+                "previous": current,
+                "new": new_value
+            }
+        )
+
+    # ---------------------------------------------------------
+    #  Obtener sesiones activas ya expiradas (para motor de expiración)
+    # ---------------------------------------------------------
+    def get_active_sessions_expired(self, now_iso: str) -> List[Dict]:
+        """
+        Devuelve sesiones con:
+        - status = 'active'
+        - expires_at < now_iso
+        """
+        response = (
+            supabase
+            .table(SESSION_TABLE)
+            .select("*")
+            .eq("status", "active")
+            .lt("expires_at", now_iso)
+            .execute()
+        )
+
+        return response.data or []
+
+    # ---------------------------------------------------------
+    #  Buscar siguiente sesión de la serie (para rolling)
+    # ---------------------------------------------------------
+    def get_next_session_in_series(self, session: Dict) -> Optional[Dict]:
+        """
+        Dada una sesión, busca la siguiente de la misma serie
+        con sequence_number mayor y status = 'parked',
+        escogiendo la de menor sequence_number posible.
+        """
+        series_id = session.get("series_id")
+        sequence_number = session.get("sequence_number")
+
+        if not series_id or sequence_number is None:
+            return None
+
+        response = (
+            supabase
+            .table(SESSION_TABLE)
+            .select("*")
+            .eq("series_id", series_id)
+            .eq("status", "parked")
+            .gt("sequence_number", sequence_number)
+            .order("sequence_number", asc=True)
+            .limit(1)
+            .execute()
+        )
+
+        data = response.data
+        if not data:
+            return None
+
+        return data[0]
 
 
-def get_chains() -> list[dict]:
-    """
-    Sesiones con cadena operativa (chain_group_id no nulo)
-    de la organización activa.
-    """
-    org_id = _require_org_or_empty()
-    if not org_id:
-        return []
-
-    params = {
-        "select": "*",
-        "chain_group_id": "not.is.null",
-        "organization_id": f"eq.{org_id}",
-    }
-    return fetch_rows("sessions", params)
-
-
-def activate_session(session_id: str) -> dict:
-    """
-    Cambia una sesión a estado 'active', la liga a la organización activa
-    y registra auditoría.
-
-    Requiere:
-      - organización activa
-      - usuario activo
-      - permiso 'session.activate'
-    """
-    org_id = get_current_org()
-    user_id = get_current_user()
-
-    if not org_id:
-        raise RuntimeError("No hay organización activa.")
-    if not user_id:
-        raise RuntimeError("No hay usuario activo.")
-    if "session.activate" not in get_current_permissions():
-        raise RuntimeError("No tienes permisos para activar sesiones.")
-
-    patch = {
-        "status": "active",
-        "organization_id": org_id,
-    }
-
-    updated = update_row("sessions", session_id, patch)
-
-    if updated is None:
-        raise RuntimeError("No se pudo actualizar la sesión en Supabase.")
-
-    # Registro de auditoría
-    log_action(
-        action="activate_session",
-        session_id=session_id,
-        performed_by=user_id,
-        metadata={"new_status": "active"},
-    )
-
-    return updated
-
-
-# -------------------------------------------------
-#   NUEVAS FUNCIONES: PROGRAMADAS / STANDBY / SERIES
-# -------------------------------------------------
-
-def get_scheduled_sessions() -> list[dict]:
-    """
-    Sesiones programadas (futuras), típicamente:
-      - status = 'scheduled'
-      - start_at en el futuro
-    de la organización activa.
-
-    Esto corresponde al tipo B que comentabas:
-    sesiones que saldrán al frontend en una fecha futura.
-    """
-    org_id = _require_org_or_empty()
-    if not org_id:
-        return []
-
-    params = {
-        "select": "*",
-        "status": "eq.scheduled",
-        "organization_id": f"eq.{org_id}",
-        "order": "start_at.asc",
-    }
-    return fetch_rows("sessions", params)
-
-
-def get_standby_sessions() -> list[dict]:
-    """
-    Sesiones en preparación / Stand by:
-
-      - status = 'standby' (o 'draft', según definas)
-      - start_at es nulo (no tienen fecha de salida aún)
-
-    Esto corresponde al tipo C:
-    sesiones preparadas para entrar en el ciclo de venta
-    y que podrían aparecer en un apartado de "futuras sesiones".
-    """
-    org_id = _require_org_or_empty()
-    if not org_id:
-        return []
-
-    params = {
-        "select": "*",
-        "status": "eq.standby",
-        "organization_id": f"eq.{org_id}",
-    }
-    return fetch_rows("sessions", params)
-
-
-def get_sessions_for_series(series_id: str) -> list[dict]:
-    """
-    Devuelve todas las sesiones asociadas a una serie concreta (session_series.id)
-    de la organización activa, ordenadas por sequence_number.
-
-    Esto permitirá manejar series tipo:
-       X23.1, X23.2, X23.3...
-    dentro de una misma organización.
-    """
-    org_id = _require_org_or_empty()
-    if not org_id:
-        return []
-
-    if not series_id:
-        st.error("Se ha solicitado sesiones de una serie, pero falta series_id.")
-        return []
-
-    params = {
-        "select": "*",
-        "organization_id": f"eq.{org_id}",
-        "series_id": f"eq.{series_id}",
-        "order": "sequence_number.asc",
-    }
-    return fetch_rows("sessions", params)
-
+# Instancia global exportable
+session_repository = SessionRepository()
 
 
