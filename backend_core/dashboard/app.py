@@ -3,23 +3,24 @@ app.py
 Panel Streamlit del backend Compra Abierta (The Platform Core Clean)
 
 Vistas disponibles:
-- Parked Sessions       (park_sessions)
-- Active Sessions       (active_sessions)
-- Session Chains        (chains)
-- History               (history_sessions)
-- Audit Logs            (audit_logs)
-- Admin Users           (admin_users)
-- Admin Seeds           (admin_seeds)  ← NUEVA
+- Parked Sessions
+- Active Sessions
+- Session Chains
+- History
+- Audit Logs
+- Admin Users
+- Admin Seeds
+- Admin Engine   ← NUEVO PANEL DE MOTOR
 
 Este archivo gestiona:
 - El enrutado del sidebar
-- La carga de cada vista
-- La estructura base del panel
+- La carga modular de cada vista
+- La estructura global del panel
 """
 
 import streamlit as st
 
-# Importación de vistas
+# Importación de vistas existentes
 from backend_core.dashboard.views.park_sessions import render_park_sessions
 from backend_core.dashboard.views.active_sessions import render_active_sessions
 from backend_core.dashboard.views.chains import render_chains
@@ -27,12 +28,13 @@ from backend_core.dashboard.views.audit_logs import render_audit_logs
 from backend_core.dashboard.views.history_sessions import render_history
 from backend_core.dashboard.views.admin_users import render_admin_users
 
-# NUEVA VISTA
+# Nuevas vistas
 from backend_core.dashboard.views.admin_seeds import render_admin_seeds
+from backend_core.dashboard.views.admin_engine import render_admin_engine
 
 
 # ---------------------------------------------------------
-# Configuración general de la página
+# Configuración general de página
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="Compra Abierta — Backend Panel",
@@ -42,10 +44,10 @@ st.set_page_config(
 
 
 # ---------------------------------------------------------
-# Sidebar (menú de navegación)
+# Sidebar (Navegación / Menú principal)
 # ---------------------------------------------------------
 def render_sidebar():
-    st.sidebar.title("📊 Panel Operativo")
+    st.sidebar.title("📊 Panel Operativo — Compra Abierta")
 
     selected = st.sidebar.radio(
         "Navegación",
@@ -56,19 +58,20 @@ def render_sidebar():
             "History",
             "Audit Logs",
             "Admin Users",
-            "Admin Seeds",        # NUEVA ENTRADA
+            "Admin Seeds",
+            "Admin Engine",   # ← NUEVO
         ],
         index=1,
     )
 
     st.sidebar.markdown("---")
-    st.sidebar.caption("Compra Abierta — The Platform Core Clean")
+    st.sidebar.caption("The Platform Core Clean — Deterministic Engine")
 
     return selected
 
 
 # ---------------------------------------------------------
-# Render principal
+# Renderizado principal
 # ---------------------------------------------------------
 def main():
     view = render_sidebar()
@@ -91,14 +94,16 @@ def main():
     elif view == "Admin Users":
         render_admin_users()
 
-    elif view == "Admin Seeds":      # NUEVO ENRUTADO
+    elif view == "Admin Seeds":
         render_admin_seeds()
 
+    elif view == "Admin Engine":
+        render_admin_engine()
+
     else:
-        st.error("Vista no encontrada.")
+        st.error("Vista no reconocida.")
 
 
 if __name__ == "__main__":
     main()
-
 
