@@ -1,144 +1,104 @@
+"""
+app.py
+Panel Streamlit del backend Compra Abierta (The Platform Core Clean)
+
+Vistas disponibles:
+- Parked Sessions       (park_sessions)
+- Active Sessions       (active_sessions)
+- Session Chains        (chains)
+- History               (history_sessions)
+- Audit Logs            (audit_logs)
+- Admin Users           (admin_users)
+- Admin Seeds           (admin_seeds)  ← NUEVA
+
+Este archivo gestiona:
+- El enrutado del sidebar
+- La carga de cada vista
+- La estructura base del panel
+"""
+
 import streamlit as st
 
-# ---------------------------
-#   LOGIN Y SESIÓN
-# ---------------------------
-from backend_core.dashboard.views.login import render_login
-from backend_core.services.session_manager import is_logged_in, logout
-
-# ---------------------------
-#   LAYOUT
-# ---------------------------
-from backend_core.dashboard.ui.layout import (
-    render_app_header,
-    render_sidebar,
-)
-
-# ---------------------------
-#   MOTOR AUTOMÁTICO
-# ---------------------------
-from backend_core.services.session_engine import process_expired_sessions
-
-# ---------------------------
-#   VISTAS
-# ---------------------------
+# Importación de vistas
 from backend_core.dashboard.views.park_sessions import render_park_sessions
 from backend_core.dashboard.views.active_sessions import render_active_sessions
-from backend_core.dashboard.views.scheduled_sessions import render_scheduled_sessions
-from backend_core.dashboard.views.standby_sessions import render_standby_sessions
 from backend_core.dashboard.views.chains import render_chains
 from backend_core.dashboard.views.audit_logs import render_audit_logs
+from backend_core.dashboard.views.history_sessions import render_history
 from backend_core.dashboard.views.admin_users import render_admin_users
-from backend_core.dashboard.views.admin_series import render_admin_series
-from backend_core.dashboard.views.history_sessions import render_history_sessions
+
+# NUEVA VISTA
+from backend_core.dashboard.views.admin_seeds import render_admin_seeds
 
 
-# ============================================================
-#                       MAIN APP
-# ============================================================
+# ---------------------------------------------------------
+# Configuración general de la página
+# ---------------------------------------------------------
+st.set_page_config(
+    page_title="Compra Abierta — Backend Panel",
+    page_icon="🟩",
+    layout="wide",
+)
 
-def main():
-    st.set_page_config(
-        page_title="Compra Abierta – Panel Operativo",
-        page_icon="🛒",
-        layout="wide",
-        initial_sidebar_state="expanded",
+
+# ---------------------------------------------------------
+# Sidebar (menú de navegación)
+# ---------------------------------------------------------
+def render_sidebar():
+    st.sidebar.title("📊 Panel Operativo")
+
+    selected = st.sidebar.radio(
+        "Navegación",
+        options=[
+            "Parked Sessions",
+            "Active Sessions",
+            "Chains",
+            "History",
+            "Audit Logs",
+            "Admin Users",
+            "Admin Seeds",        # NUEVA ENTRADA
+        ],
+        index=1,
     )
-
-    # ---------------------------------------------------------
-    # 1) MOTOR AUTOMÁTICO → Revisar expiraciones
-    # ---------------------------------------------------------
-    process_expired_sessions()
-
-    # ---------------------------------------------------------
-    # 2) Si no hay login → mostrar pantalla inicio sesión
-    # ---------------------------------------------------------
-    if not is_logged_in():
-        render_login()
-        return
-
-    # ---------------------------------------------------------
-    # 3) Header superior
-    # ---------------------------------------------------------
-    render_app_header()
-
-    # ---------------------------------------------------------
-    # 4) Sidebar usuario
-    # ---------------------------------------------------------
-    st.sidebar.markdown("### 👤 Usuario")
-
-    user_email = st.session_state.get("user_email", "desconocido")
-    st.sidebar.info(f"Conectado como:\n**{user_email}**")
-
-    if st.sidebar.button("Cerrar sesión"):
-        logout()
-        st.experimental_rerun()
 
     st.sidebar.markdown("---")
+    st.sidebar.caption("Compra Abierta — The Platform Core Clean")
 
-    # ---------------------------------------------------------
-    # 5) Sidebar organización
-    # ---------------------------------------------------------
-    render_sidebar()
+    return selected
 
-    # ---------------------------------------------------------
-    # 6) Navegación
-    # ---------------------------------------------------------
-    st.sidebar.title("📊 Navegación")
 
-    page = st.sidebar.selectbox(
-        "Selecciona vista",
-        [
-            "Parque de Sesiones",
-            "Sesiones Activas",
-            "Sesiones Programadas",
-            "Sesiones en Standby",
-            "Cadenas Operativas",
-            "Histórico de Sesiones",   # ← NUEVA VISTA
-            "Auditoría",
-            "Series de Sesiones",
-            "Gestión de Usuarios",
-        ],
-    )
+# ---------------------------------------------------------
+# Render principal
+# ---------------------------------------------------------
+def main():
+    view = render_sidebar()
 
-    # ---------------------------------------------------------
-    # 7) Router de vistas
-    # ---------------------------------------------------------
-    if page == "Parque de Sesiones":
+    if view == "Parked Sessions":
         render_park_sessions()
 
-    elif page == "Sesiones Activas":
+    elif view == "Active Sessions":
         render_active_sessions()
 
-    elif page == "Sesiones Programadas":
-        render_scheduled_sessions()
-
-    elif page == "Sesiones en Standby":
-        render_standby_sessions()
-
-    elif page == "Cadenas Operativas":
+    elif view == "Chains":
         render_chains()
 
-    elif page == "Histórico de Sesiones":
-        render_history_sessions()
+    elif view == "History":
+        render_history()
 
-    elif page == "Auditoría":
+    elif view == "Audit Logs":
         render_audit_logs()
 
-    elif page == "Series de Sesiones":
-        render_admin_series()
-
-    elif page == "Gestión de Usuarios":
+    elif view == "Admin Users":
         render_admin_users()
 
+    elif view == "Admin Seeds":      # NUEVO ENRUTADO
+        render_admin_seeds()
 
-# ============================================================
-#                       ENTRY POINT
-# ============================================================
+    else:
+        st.error("Vista no encontrada.")
+
 
 if __name__ == "__main__":
     main()
-
-
 
 
