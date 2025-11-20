@@ -140,4 +140,9 @@ class ParticipantRepository:
         log_event(
             action="participant_marked_awarded",
             session_id=None,
-            metadata={"particip
+            metadata={"participant_id": participant_id}
+        )
+
+
+# Instancia global exportable
+participant_repository = ParticipantRepository()
