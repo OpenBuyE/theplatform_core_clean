@@ -19,12 +19,11 @@ from backend_core.dashboard.views.chains import render_chains
 from backend_core.dashboard.views.audit_logs import render_audit_logs
 from backend_core.dashboard.views.admin_users import render_admin_users
 from backend_core.dashboard.views.admin_series import render_admin_series
+from backend_core.dashboard.views.scheduled_sessions import render_scheduled_sessions
+from backend_core.dashboard.views.standby_sessions import render_standby_sessions
 
 
 def main():
-    # ---------------------------------------------------
-    #   Configuración general de Streamlit
-    # ---------------------------------------------------
     st.set_page_config(
         page_title="Compra Abierta – Panel Operativo",
         page_icon="🛒",
@@ -32,21 +31,13 @@ def main():
         initial_sidebar_state="expanded",
     )
 
-    # ---------------------------------------------------
-    #   1) Si NO hay login → mostrar pantalla de login
-    # ---------------------------------------------------
     if not is_logged_in():
         render_login()
         return
 
-    # ---------------------------------------------------
-    #   2) Si hay login → header del panel
-    # ---------------------------------------------------
     render_app_header()
 
-    # ---------------------------------------------------
-    #   3) Sidebar: Info de usuario + Logout
-    # ---------------------------------------------------
+    # SIDEBAR USUARIO
     st.sidebar.markdown("### 👤 Usuario")
 
     user_email = st.session_state.get("user_email", "desconocido")
@@ -58,14 +49,10 @@ def main():
 
     st.sidebar.markdown("---")
 
-    # ---------------------------------------------------
-    #   4) Sidebar: Organización activa
-    # ---------------------------------------------------
+    # ORGANIZACIÓN
     render_sidebar()
 
-    # ---------------------------------------------------
-    #   5) Navegación del panel
-    # ---------------------------------------------------
+    # NAVIGATION
     st.sidebar.title("📊 Navegación")
 
     page = st.sidebar.selectbox(
@@ -73,21 +60,27 @@ def main():
         [
             "Parque de Sesiones",
             "Sesiones Activas",
+            "Sesiones Programadas",   # NUEVA
+            "Sesiones en Standby",    # NUEVA
             "Cadenas Operativas",
             "Auditoría",
+            "Series de Sesiones",
             "Gestión de Usuarios",
-            "Series de Sesiones",   # NUEVA
         ],
     )
 
-    # ---------------------------------------------------
-    #   6) Router de vistas
-    # ---------------------------------------------------
+    # ROUTER
     if page == "Parque de Sesiones":
         render_park_sessions()
 
     elif page == "Sesiones Activas":
         render_active_sessions()
+
+    elif page == "Sesiones Programadas":
+        render_scheduled_sessions()
+
+    elif page == "Sesiones en Standby":
+        render_standby_sessions()
 
     elif page == "Cadenas Operativas":
         render_chains()
@@ -95,14 +88,14 @@ def main():
     elif page == "Auditoría":
         render_audit_logs()
 
-    elif page == "Gestión de Usuarios":
-        render_admin_users()
-
     elif page == "Series de Sesiones":
         render_admin_series()
 
+    elif page == "Gestión de Usuarios":
+        render_admin_users()
 
-# Entry point para ejecución local
+
 if __name__ == "__main__":
     main()
+
 
