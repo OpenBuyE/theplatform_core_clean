@@ -18,6 +18,7 @@ from backend_core.dashboard.views.active_sessions import render_active_sessions
 from backend_core.dashboard.views.chains import render_chains
 from backend_core.dashboard.views.audit_logs import render_audit_logs
 from backend_core.dashboard.views.admin_users import render_admin_users
+from backend_core.dashboard.views.admin_series import render_admin_series
 
 
 def main():
@@ -74,7 +75,8 @@ def main():
             "Sesiones Activas",
             "Cadenas Operativas",
             "Auditoría",
-            "Gestión de Usuarios",   # Nueva vista
+            "Gestión de Usuarios",
+            "Series de Sesiones",   # NUEVA
         ],
     )
 
@@ -95,6 +97,9 @@ def main():
 
     elif page == "Gestión de Usuarios":
         render_admin_users()
+
+    elif page == "Series de Sesiones":
+        render_admin_series()
 
 
 # Entry point para ejecución local
