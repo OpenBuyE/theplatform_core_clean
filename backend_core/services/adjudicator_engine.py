@@ -1,155 +1,204 @@
-from datetime import datetime, timedelta
-import pytz
+"""
+adjudicator_engine.py
+Motor de adjudicación determinista de sesiones Compra Abierta.
 
-from backend_core.services.participant_repository import (
-    list_participants,
-    mark_as_adjudicated,
-)
-from backend_core.services.audit_repository import log_action
-from backend_core.services.context import get_current_user
-from backend_core.services.supabase_client import fetch_rows, update_row
+Reglas fundamentales aplicadas aquí:
+- La adjudicación sólo ocurre cuando AFORO = 100%
+- Si la sesión no completó aforo antes de expires_at → NO se adjudica
+- El adjudicatario se selecciona de forma determinista mediante:
+    - seed pública (si existe)
+    - seed interna reproducible
+    - SHA256(seed efectiva) % capacity
+- Tras adjudicar:
+    - la sesión se marca como finished
+    - se activa la siguiente sesión de la serie (rolling)
+    - se registra auditoría completa y verificable
+"""
 
-
-def _now():
-    return datetime.now(pytz.utc)
-
-
-def _get_next_in_series(session: dict) -> dict | None:
-    series_id = session.get("series_id")
-    org_id = session.get("organization_id")
-    seq = session.get("sequence_number")
-
-    if not series_id or org_id is None or seq is None:
-        return None
-
-    params = {
-        "select": "*",
-        "series_id": f"eq.{series_id}",
-        "organization_id": f"eq.{org_id}",
-        "sequence_number": f"eq.{seq + 1}",
-        "status": "eq.parked",
-    }
-    rows = fetch_rows("sessions", params)
-    if rows:
-        return rows[0]
-    return None
+import hashlib
+from datetime import datetime
+from .session_repository import session_repository
+from .participant_repository import participant_repository
+from .adjudicator_repository import adjudicator_repository
+from .session_engine import session_engine
+from .audit_repository import log_event
 
 
-def _activate_session(session: dict):
-    sid = session["id"]
-    now = _now()
-    patch = {
-        "status": "active",
-        "activated_at": now.isoformat(),
-        "expires_at": (now + timedelta(days=5)).isoformat(),
-    }
-    update_row("sessions", sid, patch)
+class AdjudicatorEngine:
 
-    log_action(
-        action="session_auto_activated_from_series",
-        session_id=sid,
-        performed_by="system",
-        metadata={"reason": "previous_session_adjudicated"},
-    )
+    # ================================================================
+    #               MÉTODO PRINCIPAL DE ADJUDICACIÓN
+    # ================================================================
+    def adjudicate_session(self, session_id: str):
+        """
+        Motor determinista completo.
+        """
+
+        # ------------------------------------------------------------
+        # 1. Cargar sesión
+        # ------------------------------------------------------------
+        session = session_repository.get_session_by_id(session_id)
+        if not session:
+            log_event(
+                action="adjudication_error_session_not_found",
+                session_id=session_id
+            )
+            return None
+
+        # ------------------------------------------------------------
+        # 2. Validar precondiciones
+        # ------------------------------------------------------------
+        if session["status"] != "active":
+            log_event(
+                action="adjudication_skipped_invalid_status",
+                session_id=session_id,
+                metadata={"status": session["status"]}
+            )
+            return None
+
+        if session.get("finished_at"):
+            log_event(
+                action="adjudication_skipped_already_finished",
+                session_id=session_id
+            )
+            return None
+
+        if session["pax_registered"] != session["capacity"]:
+            log_event(
+                action="adjudication_skipped_incomplete_capacity",
+                session_id=session_id,
+                metadata={
+                    "pax_registered": session["pax_registered"],
+                    "capacity": session["capacity"]
+                }
+            )
+            return None
+
+        if session["expires_at"] <= datetime.utcnow().isoformat():
+            log_event(
+                action="adjudication_skipped_already_expired",
+                session_id=session_id,
+                metadata={"expires_at": session["expires_at"]}
+            )
+            return None
+
+        if participant_repository.exists_awarded_participant(session_id):
+            log_event(
+                action="adjudication_skipped_already_awarded",
+                session_id=session_id
+            )
+            return None
+
+        # ------------------------------------------------------------
+        # 3. Cargar participantes
+        # ------------------------------------------------------------
+        participants = participant_repository.get_participants_by_session(session_id)
+
+        if len(participants) != session["capacity"]:
+            log_event(
+                action="adjudication_error_capacity_mismatch",
+                session_id=session_id,
+                metadata={
+                    "participants_len": len(participants),
+                    "capacity": session["capacity"]
+                }
+            )
+            return None
+
+        # Orden determinista absoluta
+        participants_sorted = sorted(
+            participants,
+            key=lambda p: (p["created_at"], p["id"])
+        )
+
+        N = len(participants_sorted)
+
+        # ------------------------------------------------------------
+        # 4. Obtener semilla pública si existe
+        # ------------------------------------------------------------
+        public_seed = adjudicator_repository.get_public_seed_for_session(session_id)
+
+        # ------------------------------------------------------------
+        # 5. Construir semilla efectiva
+        # ------------------------------------------------------------
+        effective_seed = self._build_effective_seed(session, public_seed)
+
+        # ------------------------------------------------------------
+        # 6. Calcular el índice ganador determinista
+        # ------------------------------------------------------------
+        winner_index = self._compute_winner_index(effective_seed, N)
+
+        # ------------------------------------------------------------
+        # 7. Seleccionar adjudicatario
+        # ------------------------------------------------------------
+        winner = participants_sorted[winner_index]
+
+        # ------------------------------------------------------------
+        # 8. Guardar adjudicación y cerrar sesión
+        # ------------------------------------------------------------
+        now = datetime.utcnow().isoformat()
+
+        participant_repository.mark_as_awarded(
+            participant_id=winner["id"],
+            awarded_at=now
+        )
+
+        session_repository.mark_session_as_finished(
+            session_id=session_id,
+            finished_at=now
+        )
+
+        # ------------------------------------------------------------
+        # 9. Auditoría completa y trazable
+        # ------------------------------------------------------------
+        log_event(
+            action="session_adjudicated",
+            session_id=session_id,
+            user_id=winner["user_id"],
+            organization_id=session["organization_id"],
+            metadata={
+                "winner_participant_id": winner["id"],
+                "winner_user_id": winner["user_id"],
+                "winner_index": winner_index,
+                "capacity": session["capacity"],
+                "participants_count": N,
+                "public_seed": public_seed,
+                "effective_seed": effective_seed,
+                "hash_algorithm": "SHA256"
+            }
+        )
+
+        # ------------------------------------------------------------
+        # 10. Rolling: activar siguiente sesión
+        # ------------------------------------------------------------
+        session_engine.activate_next_session_in_series(session)
+
+        return winner
+
+    # ================================================================
+    #               FUNCIONES AUXILIARES DEL MOTOR
+    # ================================================================
+    def _build_effective_seed(self, session, public_seed: str | None) -> str:
+        base = (
+            f"SESSION:{session['id']}"
+            f"|SERIES:{session['series_id']}"
+            f"|SEQ:{session['sequence_number']}"
+            f"|PRODUCT:{session['product_id']}"
+            f"|ORG:{session['organization_id']}"
+            f"|ACTIVATED_AT:{session['activated_at']}"
+            f"|CAPACITY:{session['capacity']}"
+        )
+
+        if public_seed:
+            return f"PUBLIC:{public_seed}|BASE:{base}"
+
+        return f"BASE_ONLY:{base}"
+
+    def _compute_winner_index(self, seed: str, N: int) -> int:
+        digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+        bigint = int(digest, 16)
+        return bigint % N
 
 
-def adjudicate_session(session_id: str) -> dict:
-    """
-    Motor determinista de adjudicación.
-
-    Regla clave de Compra Abierta:
-      - Solo se adjudica si el aforo está COMPLETO:
-            pax_registered >= capacity (>0)
-      - Cuando se llena el grupo, se adjudica inmediatamente
-        y se cierra la sesión.
-      - Si hay serie configurada, se activa la siguiente sesión limpia.
-    """
-    # 1) Leer sesión
-    sessions = fetch_rows(
-        "sessions",
-        {
-            "select": "*",
-            "id": f"eq.{session_id}",
-        },
-    )
-
-    if not sessions:
-        return {
-            "session_id": session_id,
-            "adjudicated": None,
-            "reason": "session_not_found",
-        }
-
-    session = sessions[0]
-    pax = session.get("pax_registered") or 0
-    capacity = session.get("capacity") or 0
-
-    if capacity <= 0:
-        return {
-            "session_id": session_id,
-            "adjudicated": None,
-            "reason": "capacity_not_defined",
-        }
-
-    if pax < capacity:
-        # Grupo aún incompleto → no se puede adjudicar
-        return {
-            "session_id": session_id,
-            "adjudicated": None,
-            "reason": "capacity_not_full",
-            "pax_registered": pax,
-            "capacity": capacity,
-        }
-
-    # 2) Leer participantes
-    participants = list_participants(session_id)
-    if not participants:
-        return {
-            "session_id": session_id,
-            "adjudicated": None,
-            "reason": "no_participants",
-        }
-
-    # 3) Regla determinista actual (placeholder):
-    #    el primer comprador registrado es el adjudicatario.
-    #    Más adelante se puede reemplazar por el algoritmo
-    #    definido en la Memoria Técnica (semilla pública, etc.).
-    first = participants[0]
-
-    awarded = mark_as_adjudicated(first["id"])
-
-    # 4) Cerrar sesión
-    update_row(
-        "sessions",
-        session_id,
-        {
-            "status": "finished",
-            "finished_at": _now().isoformat(),
-        },
-    )
-
-    # 5) Avanzar serie (sesión limpia siguiente)
-    next_session = _get_next_in_series(session)
-    if next_session:
-        _activate_session(next_session)
-
-    # 6) Auditoría
-    log_action(
-        action="session_adjudicated",
-        session_id=session_id,
-        performed_by=get_current_user() or "system_auto",
-        metadata={
-            "adjudicated_to_user_id": first["user_id"],
-            "participant_id": first["id"],
-            "pax_registered": pax,
-            "capacity": capacity,
-            "rule": "first_participant_full_capacity",
-            "awarded_at": _now().isoformat(),
-        },
-    )
-
-    return {
-        "session_id": session_id,
-        "adjudicated": awarded,
-        "rule": "first_participant_full_capacity",
-    }
+# Instancia exportable
+adjudicator_engine = AdjudicatorEngine()
