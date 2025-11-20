@@ -1,33 +1,16 @@
 """
 audit_repository.py
-Repositorio de auditoría estructurada para Compra Abierta.
+Auditoría completa del sistema Compra Abierta.
 
-Este módulo registra:
-- Adjudicaciones
-- Expiraciones
-- Activación de sesiones
-- Cambios de seeds
-- Eventos del motor (warnings, skips, info)
-- Actividad del panel (en caso necesario)
-
-La tabla recomendada en Supabase es:
-
-    public.audit_logs (
-        id uuid primary key default gen_random_uuid(),
-        action text,
-        session_id uuid null,
-        user_id uuid null,
-        organization_id uuid null,
-        metadata jsonb,
-        created_at timestamptz default now()
-    )
-
+Funciones:
+- log_event: registrar acciones del sistema
+- fetch_logs: obtener logs para el panel
 """
 
 from datetime import datetime
-from typing import Optional, Dict, Any
-from .supabase_client import supabase
+from typing import Optional, Dict, List
 
+from .supabase_client import supabase
 
 AUDIT_TABLE = "audit_logs"
 
@@ -35,78 +18,53 @@ AUDIT_TABLE = "audit_logs"
 class AuditRepository:
 
     # ---------------------------------------------------------
-    #  REGISTRO DE EVENTOS (FUNCIÓN CENTRAL)
+    # REGISTRAR EVENTO DE AUDITORÍA
     # ---------------------------------------------------------
     def log_event(
         self,
         action: str,
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
-        organization_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict] = None
     ) -> None:
-        """
-        Inserta un evento de auditoría en la tabla audit_logs.
-        Siempre registra created_at automáticamente.
-        """
 
-        if metadata is None:
-            metadata = {}
-
-        supabase.table(AUDIT_TABLE).insert({
+        entry = {
             "action": action,
             "session_id": session_id,
             "user_id": user_id,
-            "organization_id": organization_id,
-            "metadata": metadata
-        }).execute()
+            "metadata": metadata or {},
+            "created_at": datetime.utcnow().isoformat()
+        }
+
+        supabase.table(AUDIT_TABLE).insert(entry).execute()
 
     # ---------------------------------------------------------
-    #  OBTENER LOGS (para panel de admin)
+    # OBTENER LOGS PARA EL PANEL
     # ---------------------------------------------------------
-    def get_logs(self, limit: int = 2000):
-        response = (
-            supabase
-            .table(AUDIT_TABLE)
-            .select("*")
-            .order("created_at", desc=True)
-            .limit(limit)
-            .execute()
-        )
-        return response.data or []
+    def fetch_logs(
+        self,
+        limit: int = 300,
+        session_id: Optional[str] = None,
+        action: Optional[str] = None
+    ) -> List[Dict]:
 
-    # ---------------------------------------------------------
-    #  FILTRAR LOGS POR SESIÓN
-    # ---------------------------------------------------------
-    def get_logs_by_session(self, session_id: str, limit: int = 500):
-        response = (
-            supabase
-            .table(AUDIT_TABLE)
-            .select("*")
-            .eq("session_id", session_id)
-            .order("created_at", desc=True)
-            .limit(limit)
-            .execute()
-        )
+        query = supabase.table(AUDIT_TABLE).select("*")
+
+        if session_id:
+            query = query.eq("session_id", session_id)
+
+        if action:
+            query = query.eq("action", action)
+
+        query = query.order("created_at", desc=True).limit(limit)
+
+        response = query.execute()
         return response.data or []
 
 
-# Instancia exportable
+# Instancia global
 audit_repository = AuditRepository()
 
-
-# helper global — evita imports circulares en los servicios
-def log_event(
-    action: str,
-    session_id: Optional[str] = None,
-    user_id: Optional[str] = None,
-    organization_id: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None
-) -> None:
-    audit_repository.log_event(
-        action=action,
-        session_id=session_id,
-        user_id=user_id,
-        organization_id=organization_id,
-        metadata=metadata
-    )
+# Export “log_event” para mantener compatibilidad con el panel
+log_event = audit_repository.log_event
+fetch_logs = audit_repository.fetch_logs
