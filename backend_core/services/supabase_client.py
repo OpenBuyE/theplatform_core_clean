@@ -1,24 +1,18 @@
 """
-supabase_client.py
-Cliente Supabase para Compra Abierta.
-
-Compatible con supabase-py moderno.
+supabase_client.py — versión estable para Streamlit Cloud
+Usa supabase-py 1.0.5 (compatible con Python 3.11 y Cloud)
 """
 
 import os
 from supabase import create_client
 from dotenv import load_dotenv
 
-# Cargar .env
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")   # ← usa la ANON KEY
 
 if not SUPABASE_URL or not SUPABASE_KEY:
-    raise RuntimeError(
-        "SUPABASE_URL o SUPABASE_KEY no están definidas en el entorno."
-    )
+    raise RuntimeError("SUPABASE_URL o SUPABASE_KEY no están configuradas.")
 
-# Crear cliente global
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
