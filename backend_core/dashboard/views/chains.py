@@ -1,33 +1,38 @@
 import streamlit as st
 
-from backend_core.services.session_repository import get_chains
-from backend_core.services.acl import (
-    require_org,
-    require_permission
-)
+from backend_core.services.session_repository import session_repository
 
 
-@require_org
-@require_permission("chain.view")
 def render_chains():
+    st.title("🔗 Series y Cadenas de Sesiones")
 
-    st.header("🔗 Cadenas Operativas")
+    st.markdown("""
+    Esta vista muestra las series y secuencias de sesiones.
+    Cada serie se identifica por `series_id`, y dentro de ella
+    se listan las sesiones ordenadas por `sequence_number`.
+    """)
 
-    rows = get_chains()
-    if not rows:
-        st.info("No hay cadenas operativas para esta organización.")
+    sessions = session_repository.get_sessions(limit=500)
+
+    if not sessions:
+        st.info("No hay sesiones registradas.")
         return
 
-    for row in rows:
+    # Agrupar por series_id
+    series = {}
+    for s in sessions:
+        sid = s["series_id"]
+        series.setdefault(sid, []).append(s)
 
-        st.subheader(f"ID: {row['id']}")
+    for sid, items in series.items():
+        items_sorted = sorted(items, key=lambda x: x["sequence_number"])
 
-        st.write(f"**Operador:** {row.get('operator_code', '-')}")
-        st.write(f"**Proveedor:** {row.get('product_id', '-')}")
-        st.write(f"**Grupo Cadena:** {row.get('chain_group_id', '-')}")
-        st.write(f"**Estado:** `{row.get('status', '-')}`")
-        st.write(f"**Importe:** {row.get('amount', 0)} €")
-
-        st.markdown("---")
+        with st.expander(f"🔗 Serie {sid}"):
+            for s in items_sorted:
+                st.write(
+                    f"**Seq {s['sequence_number']}** — "
+                    f"Estado: {s['status']} — "
+                    f"Aforo: {s['pax_registered']}/{s['capacity']}"
+                )
 
 
