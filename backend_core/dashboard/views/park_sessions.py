@@ -1,51 +1,49 @@
 import streamlit as st
 
-from backend_core.services.session_repository import (
-    get_sessions,
-    activate_session
-)
-from backend_core.services.acl import (
-    require_org,
-    require_permission
-)
+from backend_core.services.session_repository import session_repository
+from backend_core.services.session_engine import session_engine
+from backend_core.services.audit_repository import log_event
 
 
-@require_org
-@require_permission("session.view")
 def render_park_sessions():
+    st.title("🅿️ Sesiones en Parque")
 
-    st.header("🅿️ Parque de Sesiones")
+    st.markdown(
+        """
+Estas son las sesiones **parked**, listas para ser activadas por el sistema
+o manualmente (debug).
+"""
+    )
 
-    rows = get_sessions()
-    if not rows:
-        st.info("No hay sesiones parked para esta organización.")
+    sessions = session_repository.get_sessions(status="parked", limit=200)
+
+    if not sessions:
+        st.info("No hay sesiones parked.")
         return
 
-    for row in rows:
-        st.subheader(f"ID: {row['id']}")
+    for s in sessions:
+        with st.expander(f"🅿️ Sesión {s['id']} — Producto {s['product_id']}"):
+            st.write("**Estado:**", s["status"])
+            st.write("**Aforo:**", f"{s['pax_registered']} / {s['capacity']}")
+            st.write("**Sequence:**", s["sequence_number"])
+            st.write("**Serie:**", s["series_id"])
 
-        st.write(f"**Operador:** {row.get('operator_code', '-')}")
-        st.write(f"**Proveedor:** {row.get('product_id', '-')}")
-        st.write(f"**Estado:** `{row.get('status', '-')}`")
-        st.write(f"**Importe:** {row.get('amount', 0)} €")
+            st.markdown("---")
 
-        # Botón de activación con ACL
-        @require_permission("session.activate")
-        def activate_ui():
-            try:
-                activate_session(row["id"])
-                st.success("Sesión activada correctamente")
-                st.experimental_rerun()
-            except Exception as e:
-                st.error(f"Error al activar: {str(e)}")
+            # Botón para activar esta sesión (debug)
+            if st.button("Activar esta sesión", key=f"activate_{s['id']}"):
+                activated = session_engine.activate_session(s["id"])
 
-        if st.button("🚀 Activar Sesión", key=f"activate_{row['id']}"):
-            activate_ui()
+                if activated:
+                    st.success(f"Sesión activada: {s['id']}")
+                    log_event(
+                        action="ui_manual_activation",
+                        session_id=s["id"],
+                        metadata={}
+                    )
+                    st.experimental_rerun()
+                else:
+                    st.error("No se pudo activar la sesión.")
 
-        st.markdown("---")
-
-
-
-
-
-
+            with st.expander("🔍 Debug info"):
+                st.json(s)
