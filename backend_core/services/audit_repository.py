@@ -1,100 +1,112 @@
-import streamlit as st
-import requests
+"""
+audit_repository.py
+Repositorio de auditoría estructurada para Compra Abierta.
 
-SUPABASE_URL = st.secrets["SUPABASE_URL"].rstrip("/")
-SUPABASE_KEY = st.secrets["SUPABASE_SERVICE_ROLE"]
+Este módulo registra:
+- Adjudicaciones
+- Expiraciones
+- Activación de sesiones
+- Cambios de seeds
+- Eventos del motor (warnings, skips, info)
+- Actividad del panel (en caso necesario)
+
+La tabla recomendada en Supabase es:
+
+    public.audit_logs (
+        id uuid primary key default gen_random_uuid(),
+        action text,
+        session_id uuid null,
+        user_id uuid null,
+        organization_id uuid null,
+        metadata jsonb,
+        created_at timestamptz default now()
+    )
+
+"""
+
+from datetime import datetime
+from typing import Optional, Dict, Any
+from .supabase_client import supabase
 
 
-def _headers() -> dict:
-    return {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
-    }
+AUDIT_TABLE = "audit_logs"
 
 
-def _get_current_org_id() -> str | None:
-    """
-    Devuelve la organización activa desde la sesión de Streamlit.
-    En el panel el selector de organización debe haber guardado esto en:
-    st.session_state["organization_id"]
-    """
-    return st.session_state.get("organization_id")
+class AuditRepository:
+
+    # ---------------------------------------------------------
+    #  REGISTRO DE EVENTOS (FUNCIÓN CENTRAL)
+    # ---------------------------------------------------------
+    def log_event(
+        self,
+        action: str,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        organization_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """
+        Inserta un evento de auditoría en la tabla audit_logs.
+        Siempre registra created_at automáticamente.
+        """
+
+        if metadata is None:
+            metadata = {}
+
+        supabase.table(AUDIT_TABLE).insert({
+            "action": action,
+            "session_id": session_id,
+            "user_id": user_id,
+            "organization_id": organization_id,
+            "metadata": metadata
+        }).execute()
+
+    # ---------------------------------------------------------
+    #  OBTENER LOGS (para panel de admin)
+    # ---------------------------------------------------------
+    def get_logs(self, limit: int = 2000):
+        response = (
+            supabase
+            .table(AUDIT_TABLE)
+            .select("*")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return response.data or []
+
+    # ---------------------------------------------------------
+    #  FILTRAR LOGS POR SESIÓN
+    # ---------------------------------------------------------
+    def get_logs_by_session(self, session_id: str, limit: int = 500):
+        response = (
+            supabase
+            .table(AUDIT_TABLE)
+            .select("*")
+            .eq("session_id", session_id)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return response.data or []
 
 
-def log_action(
+# Instancia exportable
+audit_repository = AuditRepository()
+
+
+# helper global — evita imports circulares en los servicios
+def log_event(
     action: str,
-    session_id: str,
-    performed_by: str,
-    metadata: dict | None = None,
-):
-    """
-    Inserta un registro de auditoría en Supabase.
-    No rompe el panel si falla: muestra error y continúa.
-    """
-
-    url = f"{SUPABASE_URL}/rest/v1/audit_logs"
-    headers = _headers()
-
-    payload = {
-        "action": action,
-        "session_id": session_id,
-        "performed_by": performed_by,
-        "metadata": metadata or {},
-        # Multi-tenant: cada log asociado a una organización
-        "organization_id": _get_current_org_id(),
-    }
-
-    try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=10)
-
-        if not resp.ok:
-            st.error(f"[AUDIT] Error al registrar auditoría ({resp.status_code}).")
-            # st.write(resp.text)  # opcional para depurar
-            return None
-
-        data = resp.json()
-        return data[0] if isinstance(data, list) and data else data
-
-    except Exception as e:
-        st.error(f"[AUDIT] Error al registrar auditoría: {e}")
-        return None
-
-
-def fetch_logs() -> list[dict]:
-    """
-    Lee los registros de la tabla audit_logs de Supabase
-    filtrados por la organización activa.
-
-    Nunca revienta el panel: si hay problemas, devuelve [].
-    """
-    org_id = _get_current_org_id()
-    if not org_id:
-        st.warning("Selecciona una organización para ver los registros de auditoría.")
-        return []
-
-    url = f"{SUPABASE_URL}/rest/v1/audit_logs"
-    headers = _headers()
-
-    params = {
-        "select": "*",
-        "order": "performed_at.desc",
-        "organization_id": f"eq.{org_id}",
-    }
-
-    try:
-        resp = requests.get(url, headers=headers, params=params, timeout=10)
-
-        if not resp.ok:
-            st.error(f"[AUDIT] Error al leer auditoría ({resp.status_code})")
-            # st.write(resp.text)  # opcional depuración
-            return []
-
-        data = resp.json()
-        return data if isinstance(data, list) else []
-
-    except Exception as e:
-        st.error(f"[AUDIT] No se pudo conectar para leer auditoría: {e}")
-        return []
-
+    session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    organization_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None
+) -> None:
+    audit_repository.log_event(
+        action=action,
+        session_id=session_id,
+        user_id=user_id,
+        organization_id=organization_id,
+        metadata=metadata
+    )
