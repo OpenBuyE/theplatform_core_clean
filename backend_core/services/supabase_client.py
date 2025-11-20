@@ -22,4 +22,3 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 # Crear cliente global
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
