@@ -1,159 +1,143 @@
-import streamlit as st
-import requests
+"""
+participant_repository.py
+Gestión de participantes de sesiones Compra Abierta.
 
-from backend_core.services.supabase_client import fetch_rows, update_row
-from backend_core.services.context import get_current_org, get_current_user
-from backend_core.services.audit_repository import log_action
-from backend_core.services.adjudicator_engine import adjudicate_session
+Responsabilidades:
+- Insertar participantes en la sesión
+- Verificar si ya existe un adjudicatario en la sesión
+- Obtener lista de participantes
+- Disparar adjudicación cuando se completa aforo
+"""
 
-SUPABASE_URL = st.secrets["SUPABASE_URL"].rstrip("/")
-SUPABASE_KEY = st.secrets["SUPABASE_SERVICE_ROLE"]
+from datetime import datetime
+from typing import List, Dict, Optional
 
-
-def _headers() -> dict:
-    return {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
-    }
+from .supabase_client import supabase
+from .audit_repository import log_event
+from .session_repository import session_repository
+from .adjudicator_engine import adjudicator_engine
 
 
-# ---------------------------------------------------
-#   PARTICIPANTES / COMPRADORES
-# ---------------------------------------------------
+PARTICIPANT_TABLE = "session_participants"
 
-def add_participant(session_id: str, amount: float, price: float, quantity: int = 1):
-    """
-    Registra un comprador en una sesión y actualiza el aforo.
 
-    Regla clave:
-      - Cada participante suma 1 en pax_registered
-      - Si pax_registered == capacity → se dispara la operativa determinista
-        (adjudicación inmediata) y la sesión se cierra.
-    """
-    org_id = get_current_org()
-    user_id = get_current_user()
+class ParticipantRepository:
 
-    if not org_id or not user_id:
-        st.error("No hay organización o usuario activo para registrar el comprador.")
-        return None
+    # ---------------------------------------------------------
+    #  Obtener participantes de una sesión
+    # ---------------------------------------------------------
+    def get_participants_by_session(self, session_id: str) -> List[Dict]:
+        response = (
+            supabase
+            .table(PARTICIPANT_TABLE)
+            .select("*")
+            .eq("session_id", session_id)
+            .order("created_at", asc=True)
+            .execute()
+        )
+        return response.data or []
 
-    url = f"{SUPABASE_URL}/rest/v1/session_participants"
+    # ---------------------------------------------------------
+    #  Comprobar si ya existe un adjudicatario en la sesión
+    # ---------------------------------------------------------
+    def exists_awarded_participant(self, session_id: str) -> bool:
+        response = (
+            supabase
+            .table(PARTICIPANT_TABLE)
+            .select("id")
+            .eq("session_id", session_id)
+            .eq("is_awarded", True)
+            .execute()
+        )
+        return len(response.data or []) > 0
 
-    payload = {
-        "session_id": session_id,
-        "user_id": user_id,
-        "organization_id": org_id,
-        "amount": amount,
-        "price": price,
-        "quantity": quantity,
-    }
+    # ---------------------------------------------------------
+    #  Insertar participante en sesión
+    #  (Y disparar adjudicación si aforo se completa)
+    # ---------------------------------------------------------
+    def add_participant(
+        self,
+        session_id: str,
+        user_id: str,
+        organization_id: str,
+        amount: float,
+        price: float,
+        quantity: int,
+    ) -> Optional[Dict]:
 
-    try:
-        resp = requests.post(url, headers=_headers(), json=payload, timeout=10)
+        now = datetime.utcnow().isoformat()
 
-        if not resp.ok:
-            st.error(f"Error al registrar comprador: {resp.text}")
+        # 1. Insertar participante
+        insert_response = (
+            supabase
+            .table(PARTICIPANT_TABLE)
+            .insert({
+                "session_id": session_id,
+                "user_id": user_id,
+                "organization_id": organization_id,
+                "amount": amount,
+                "price": price,
+                "quantity": quantity,
+                "is_awarded": False,
+                "created_at": now
+            })
+            .execute()
+        )
+
+        if not insert_response.data:
+            log_event(
+                action="participant_insert_error",
+                session_id=session_id,
+                user_id=user_id
+            )
             return None
 
-        data = resp.json()
-        participant = data[0] if isinstance(data, list) and data else data
+        participant = insert_response.data[0]
 
-        # Actualizar aforo y, si se completa, disparar adjudicación determinista
-        _increment_pax_and_maybe_adjudicate(session_id)
+        log_event(
+            action="participant_added",
+            session_id=session_id,
+            user_id=user_id,
+            metadata={"participant_id": participant["id"]}
+        )
+
+        # 2. Incrementar pax_registered
+        session_repository.increment_pax_registered(session_id)
+
+        # 3. Recargar sesión
+        session = session_repository.get_session_by_id(session_id)
+        if not session:
+            log_event(
+                action="participant_added_session_not_found",
+                session_id=session_id
+            )
+            return participant
+
+        # 4. Si aforo completo → adjudicar
+        if (
+            session["pax_registered"] == session["capacity"]
+            and session["expires_at"] > datetime.utcnow().isoformat()
+        ):
+            adjudicator_engine.adjudicate_session(session_id)
 
         return participant
 
-    except Exception as e:
-        st.error(f"Error al registrar comprador: {e}")
-        return None
-
-
-def list_participants(session_id: str) -> list[dict]:
-    params = {
-        "select": "*, users(name,email)",
-        "session_id": f"eq.{session_id}",
-        "order": "created_at.asc",
-    }
-    return fetch_rows("session_participants", params)
-
-
-# ---------------------------------------------------
-#   AFORO: pax_registered + adjudicación
-# ---------------------------------------------------
-
-def _increment_pax_and_maybe_adjudicate(session_id: str):
-    """
-    Incrementa pax_registered.
-    Si pax_registered == capacity → dispara adjudicación determinista.
-
-    El cierre de sesión por tiempo (5 días sin completar aforo)
-    lo gestiona session_engine.process_expired_sessions().
-    """
-    rows = fetch_rows(
-        "sessions",
-        {
-            "select": "*",
-            "id": f"eq.{session_id}",
-        }
-    )
-
-    if not rows:
-        st.error("No se encontró la sesión para actualizar el aforo.")
-        return
-
-    session = rows[0]
-    current_pax = session.get("pax_registered") or 0
-    capacity = session.get("capacity") or 0
-
-    new_pax = current_pax + 1
-
-    patch = {
-        "pax_registered": new_pax,
-    }
-
-    update_row("sessions", session_id, patch)
-
-    # Si no hay capacidad definida, no podemos aplicar la lógica de grupo completo
-    if capacity <= 0:
-        return
-
-    # Si se ha completado el aforo → adjudicación determinista inmediata
-    if new_pax >= capacity:
-        log_action(
-            action="session_full_capacity_reached",
-            session_id=session_id,
-            performed_by=get_current_user() or "system",
-            metadata={
-                "pax_registered": new_pax,
-                "capacity": capacity,
-            },
+    # ---------------------------------------------------------
+    #  Marcar participante como adjudicatario
+    # ---------------------------------------------------------
+    def mark_as_awarded(self, participant_id: str, awarded_at: str) -> None:
+        (
+            supabase
+            .table(PARTICIPANT_TABLE)
+            .update({
+                "is_awarded": True,
+                "awarded_at": awarded_at
+            })
+            .eq("id", participant_id)
+            .execute()
         )
 
-        adjudicate_session(session_id)
-
-
-# ---------------------------------------------------
-#   ADJUDICACIÓN (bandera en participantes)
-# ---------------------------------------------------
-
-def mark_as_adjudicated(participant_id: str) -> dict | None:
-    """
-    Marca a un comprador como adjudicatario determinista.
-    """
-    from datetime import datetime
-    import pytz
-
-    now = datetime.now(pytz.utc).isoformat()
-    patch = {
-        "is_awarded": True,
-        "awarded_at": now,
-    }
-
-    try:
-        updated = update_row("session_participants", participant_id, patch)
-        return updated
-    except Exception as e:
-        st.error(f"Error al marcar adjudicatario: {e}")
-        return None
+        log_event(
+            action="participant_marked_awarded",
+            session_id=None,
+            metadata={"particip
