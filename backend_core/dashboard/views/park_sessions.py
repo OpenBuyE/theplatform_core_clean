@@ -6,44 +6,35 @@ from backend_core.services.audit_repository import log_event
 
 
 def render_park_sessions():
-    st.title("🅿️ Sesiones en Parque")
-
-    st.markdown(
-        """
-Estas son las sesiones **parked**, listas para ser activadas por el sistema
-o manualmente (debug).
-"""
-    )
+    st.title("🟦 Sesiones en Parque (Parked)")
 
     sessions = session_repository.get_sessions(status="parked", limit=200)
 
     if not sessions:
-        st.info("No hay sesiones parked.")
+        st.info("No hay sesiones parked en este momento.")
         return
 
     for s in sessions:
-        with st.expander(f"🅿️ Sesión {s['id']} — Producto {s['product_id']}"):
+        with st.expander(f"🟦 Sesión {s['id']} — Producto {s['product_id']}"):
             st.write("**Estado:**", s["status"])
             st.write("**Aforo:**", f"{s['pax_registered']} / {s['capacity']}")
-            st.write("**Sequence:**", s["sequence_number"])
             st.write("**Serie:**", s["series_id"])
+            st.write("**Sequence:**", s["sequence_number"])
+            st.write("**Creada en:**", s.get("created_at"))
 
             st.markdown("---")
 
-            # Botón para activar esta sesión (debug)
-            if st.button("Activar esta sesión", key=f"activate_{s['id']}"):
-                activated = session_engine.activate_session(s["id"])
-
+            if st.button(
+                "Activar sesión ahora",
+                key=f"activate_{s['id']}"
+            ):
+                activated = session_repository.activate_session(session_id=s["id"])
                 if activated:
-                    st.success(f"Sesión activada: {s['id']}")
+                    st.success("Sesión activada correctamente.")
                     log_event(
                         action="ui_manual_activation",
-                        session_id=s["id"],
-                        metadata={}
+                        session_id=s["id"]
                     )
                     st.experimental_rerun()
                 else:
                     st.error("No se pudo activar la sesión.")
-
-            with st.expander("🔍 Debug info"):
-                st.json(s)
