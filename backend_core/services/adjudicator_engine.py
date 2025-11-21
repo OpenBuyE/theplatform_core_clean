@@ -1,31 +1,42 @@
 """
 adjudicator_engine.py
-Motor determinista de adjudicación para Compra Abierta.
+Motor determinista de adjudicación de Compra Abierta.
 
-Reglas:
-- Aforo debe estar al 100%
-- Se adjudica inmediatamente
-- No usa azar
-- Selección determinista basada en orden / seed pública / hash
+Responsabilidades:
+- Verificar condiciones de aforo y estado de sesión
+- Construir una semilla determinista (base + pública)
+- Elegir un único adjudicatario de forma determinista y auditable
+- Marcar adjudicatario y sesión como finalizada
+- Activar la siguiente sesión de la serie (rolling)
+- Disparar el motor contractual (contract_engine)
 """
 
-from datetime import datetime
 import hashlib
+from datetime import datetime
+from typing import Dict, List, Optional
 
+from .supabase_client import supabase
 from .session_repository import session_repository
-from .participant_repository import participant_repository
 from .adjudicator_repository import adjudicator_repository
 from .session_engine import session_engine
 from .audit_repository import log_event
+from .contract_engine import contract_engine
+
+
+PARTICIPANT_TABLE = "session_participants"
 
 
 class AdjudicatorEngine:
+    # ---------------------------------------------------------
+    #  Entrada principal: adjudicar una sesión
+    # ---------------------------------------------------------
+    def adjudicate_session(self, session_id: str) -> Optional[Dict]:
+        """
+        Ejecuta el motor determinista de adjudicación para una sesión.
+        Devuelve el participante adjudicatario (dict) o None si no se puede adjudicar.
+        """
 
-    # ---------------------------------------------------------
-    #  Fun: adjudicar una sesión completa
-    # ---------------------------------------------------------
-    def adjudicate_session(self, session_id: str):
-        # 1. Obtener sesión
+        # 1) Cargar sesión
         session = session_repository.get_session_by_id(session_id)
         if not session:
             log_event(
@@ -34,17 +45,17 @@ class AdjudicatorEngine:
             )
             return None
 
-        # 2. Validar aforo completo
-        if session["pax_registered"] != session["capacity"]:
+        # Debe estar activa
+        if session["status"] != "active":
             log_event(
-                action="adjudication_error_not_full",
+                action="adjudication_skipped_session_not_active",
                 session_id=session_id,
-                metadata={"pax": session["pax_registered"], "capacity": session["capacity"]}
+                metadata={"status": session["status"]}
             )
             return None
 
-        # 3. Obtener participantes
-        participants = participant_repository.get_participants_by_session(session_id)
+        # 2) Cargar participantes
+        participants = self._get_participants(session_id)
         if not participants:
             log_event(
                 action="adjudication_error_no_participants",
@@ -52,55 +63,157 @@ class AdjudicatorEngine:
             )
             return None
 
-        # 4. Obtener seed pública si existe
-        public_seed = adjudicator_repository.get_public_seed_for_session(session_id)
+        # 3) Validar aforo completo
+        capacity = session["capacity"]
+        pax_registered = session.get("pax_registered", len(participants))
 
-        # 5. Selección determinista
-        #
-        # A falta del motor avanzado con hashing público,
-        # aplicamos esta regla estable:
-        #
-        # - si NO hay seed → ganador = primer participante
-        # - si hay seed → hash(seed + session_id) % total
-        #
-        if not public_seed:
-            winner = participants[0]
+        if pax_registered != capacity or len(participants) != capacity:
+            log_event(
+                action="adjudication_skipped_incomplete_capacity",
+                session_id=session_id,
+                metadata={
+                    "pax_registered": pax_registered,
+                    "participants_count": len(participants),
+                    "capacity": capacity,
+                }
+            )
+            return None
 
-        else:
-            seed_input = (public_seed + session_id).encode("utf-8")
-            hashed = hashlib.sha256(seed_input).hexdigest()
-            index = int(hashed, 16) % len(participants)
-            winner = participants[index]
+        # 4) Validar que la sesión NO haya expirado
+        now_iso = datetime.utcnow().isoformat()
+        expires_at = session.get("expires_at")
+        if expires_at and expires_at < now_iso:
+            log_event(
+                action="adjudication_skipped_session_expired",
+                session_id=session_id,
+                metadata={"expires_at": expires_at}
+            )
+            return None
 
-        # 6. Marcar ganador en BD
-        awarded_at = datetime.utcnow().isoformat()
+        # 5) Calcular índice determinista
+        index = self._compute_deterministic_index(session, participants)
+        awarded_participant = participants[index]
 
-        participant_repository.mark_as_awarded(
-            participant_id=winner["id"],
-            awarded_at=awarded_at
-        )
+        # 6) Marcar adjudicatario
+        awarded_at = now_iso
+        self._mark_participant_awarded(awarded_participant["id"], awarded_at)
 
-        # 7. Marcar sesión como finalizada
-        session_repository.mark_session_as_finished(
-            session_id=session_id,
-            finished_at=awarded_at
-        )
+        # 7) Marcar sesión como finalizada
+        session_repository.mark_session_as_finished(session_id, now_iso)
 
-        # 8. Activar siguiente sesión (rolling)
-        session_engine.activate_next_session_in_series(session)
-
-        # 9. Logging
         log_event(
-            action="adjudication_success",
+            action="session_adjudicated",
             session_id=session_id,
+            user_id=awarded_participant["user_id"],
             metadata={
-                "winner": winner["id"],
-                "seed_used": public_seed,
-                "total_participants": len(participants)
+                "awarded_participant_id": awarded_participant["id"],
+                "index": index,
+                "capacity": capacity
             }
         )
 
-        return winner
+        # 8) Rolling: activar siguiente sesión de la serie
+        session_engine.activate_next_session_in_series(session)
+
+        # 9) Motor contractual: registrar operación contractual
+        contract_engine.on_session_awarded(
+            session=session,
+            participants=participants,
+            awarded_participant=awarded_participant,
+        )
+
+        return awarded_participant
+
+    # ---------------------------------------------------------
+    #  Obtener participantes (directo desde Supabase)
+    # ---------------------------------------------------------
+    def _get_participants(self, session_id: str) -> List[Dict]:
+        response = (
+            supabase
+            .table(PARTICIPANT_TABLE)
+            .select("*")
+            .eq("session_id", session_id)
+            .order("created_at", asc=True)
+            .execute()
+        )
+        return response.data or []
+
+    # ---------------------------------------------------------
+    #  Marcar adjudicatario
+    # ---------------------------------------------------------
+    def _mark_participant_awarded(self, participant_id: str, awarded_at: str) -> None:
+        (
+            supabase
+            .table(PARTICIPANT_TABLE)
+            .update({
+                "is_awarded": True,
+                "awarded_at": awarded_at
+            })
+            .eq("id", participant_id)
+            .execute()
+        )
+
+        log_event(
+            action="participant_marked_awarded",
+            metadata={"participant_id": participant_id, "awarded_at": awarded_at}
+        )
+
+    # ---------------------------------------------------------
+    #  Construcción determinista del índice
+    # ---------------------------------------------------------
+    def _compute_deterministic_index(
+        self,
+        session: Dict,
+        participants: List[Dict]
+    ) -> int:
+        """
+        Construye una semilla determinista combinando:
+
+        - session_id
+        - series_id, sequence_number
+        - ids de participantes
+        - seed pública (si existe)
+
+        Y aplica SHA256, tomando el módulo con la capacidad.
+        """
+
+        session_id = session["id"]
+        series_id = session.get("series_id") or ""
+        sequence_number = session.get("sequence_number") or 0
+
+        # Seed pública (admin configurable)
+        public_seed = adjudicator_repository.get_public_seed_for_session(session_id)
+        public_seed_str = public_seed or ""
+
+        # Material base determinista
+        participant_ids = [p["id"] for p in participants]
+        base_material = "|".join([
+            session_id,
+            series_id,
+            str(sequence_number),
+            "|".join(participant_ids),
+        ])
+
+        combined = public_seed_str + "|" + base_material
+        digest = hashlib.sha256(combined.encode("utf-8")).hexdigest()
+        value = int(digest, 16)
+
+        capacity = session["capacity"]
+        index = value % capacity
+
+        log_event(
+            action="adjudication_seed_computed",
+            session_id=session_id,
+            metadata={
+                "public_seed": public_seed_str,
+                "base_material_hash": hashlib.sha256(base_material.encode("utf-8")).hexdigest(),
+                "digest": digest,
+                "value_mod_capacity": index,
+                "capacity": capacity,
+            }
+        )
+
+        return index
 
 
 # Instancia global
