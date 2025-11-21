@@ -15,24 +15,20 @@ from typing import List, Dict, Optional
 from .supabase_client import supabase
 from .audit_repository import log_event
 from .session_repository import session_repository
-from .adjudicator_engine import adjudicator_engine
-
 
 PARTICIPANT_TABLE = "session_participants"
 
 
 class ParticipantRepository:
-
     # ---------------------------------------------------------
     #  Obtener participantes de una sesión
     # ---------------------------------------------------------
     def get_participants_by_session(self, session_id: str) -> List[Dict]:
         response = (
-            supabase
-            .table(PARTICIPANT_TABLE)
+            supabase.table(PARTICIPANT_TABLE)
             .select("*")
             .eq("session_id", session_id)
-            .order("created_at", asc=True)
+            .order("created_at", desc=False)
             .execute()
         )
         return response.data or []
@@ -42,8 +38,7 @@ class ParticipantRepository:
     # ---------------------------------------------------------
     def exists_awarded_participant(self, session_id: str) -> bool:
         response = (
-            supabase
-            .table(PARTICIPANT_TABLE)
+            supabase.table(PARTICIPANT_TABLE)
             .select("id")
             .eq("session_id", session_id)
             .eq("is_awarded", True)
@@ -52,8 +47,8 @@ class ParticipantRepository:
         return len(response.data or []) > 0
 
     # ---------------------------------------------------------
-    #  Insertar participante en sesión
-    #  (Y disparar adjudicación si aforo se completa)
+    #  Insertar participante
+    #  (y disparar adjudicación si se completa aforo)
     # ---------------------------------------------------------
     def add_participant(
         self,
@@ -64,23 +59,22 @@ class ParticipantRepository:
         price: float,
         quantity: int,
     ) -> Optional[Dict]:
-
         now = datetime.utcnow().isoformat()
 
-        # 1. Insertar participante
         insert_response = (
-            supabase
-            .table(PARTICIPANT_TABLE)
-            .insert({
-                "session_id": session_id,
-                "user_id": user_id,
-                "organization_id": organization_id,
-                "amount": amount,
-                "price": price,
-                "quantity": quantity,
-                "is_awarded": False,
-                "created_at": now,
-            })
+            supabase.table(PARTICIPANT_TABLE)
+            .insert(
+                {
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "organization_id": organization_id,
+                    "amount": amount,
+                    "price": price,
+                    "quantity": quantity,
+                    "is_awarded": False,
+                    "created_at": now,
+                }
+            )
             .execute()
         )
 
@@ -101,10 +95,10 @@ class ParticipantRepository:
             metadata={"participant_id": participant["id"]},
         )
 
-        # 2. Incrementar pax_registered
+        # Incrementar pax_registered
         session_repository.increment_pax_registered(session_id)
 
-        # 3. Recargar sesión
+        # Recargar sesión
         session = session_repository.get_session_by_id(session_id)
         if not session:
             log_event(
@@ -113,12 +107,14 @@ class ParticipantRepository:
             )
             return participant
 
-        # 4. Si aforo completo y no expirada → adjudicar
-        now_iso = datetime.utcnow().isoformat()
+        # Si aforo completo y no expirada → adjudicar
         if (
-            session.get("pax_registered") == session.get("capacity")
-            and (session.get("expires_at") is None or session["expires_at"] > now_iso)
+            session["pax_registered"] == session["capacity"]
+            and session.get("expires_at") > datetime.utcnow().isoformat()
         ):
+            # Import LOCAL para evitar import circular a nivel de módulo
+            from .adjudicator_engine import adjudicator_engine
+
             adjudicator_engine.adjudicate_session(session_id)
 
         return participant
@@ -128,12 +124,8 @@ class ParticipantRepository:
     # ---------------------------------------------------------
     def mark_as_awarded(self, participant_id: str, awarded_at: str) -> None:
         (
-            supabase
-            .table(PARTICIPANT_TABLE)
-            .update({
-                "is_awarded": True,
-                "awarded_at": awarded_at,
-            })
+            supabase.table(PARTICIPANT_TABLE)
+            .update({"is_awarded": True, "awarded_at": awarded_at})
             .eq("id", participant_id)
             .execute()
         )
@@ -141,12 +133,9 @@ class ParticipantRepository:
         log_event(
             action="participant_marked_awarded",
             session_id=None,
-            metadata={
-                "participant_id": participant_id,
-                "awarded_at": awarded_at,
-            },
+            metadata={"participant_id": participant_id, "awarded_at": awarded_at},
         )
 
 
-# Instancia exportable
 participant_repository = ParticipantRepository()
+
