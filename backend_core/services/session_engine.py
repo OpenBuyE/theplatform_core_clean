@@ -1,21 +1,15 @@
 """
 session_engine.py
-Motor de expiración y rolling automático de sesiones.
+Motor de sesiones para Compra Abierta.
 
-Reglas implementadas:
-
-1) Si una sesión active NO completa aforo antes de expires_at:
-    -> se marca como finished sin adjudicación
-    -> se activa la siguiente sesión parked de la misma serie
-
-2) Si una sesión se adjudica (motor determinista), este módulo
-   se usa para activar la siguiente sesión (rolling).
-
-Este motor NO adjudica sesiones. Esa lógica está en adjudicator_engine.
+Responsabilidades:
+- Expirar sesiones activas que hayan superado el tiempo máximo
+- Activar la siguiente sesión en la serie (rolling)
+- Asegurar coherencia total con session_repository
 """
 
-from datetime import datetime, timedelta
-from typing import Dict, Optional
+from datetime import datetime
+from typing import Optional, Dict
 
 from .session_repository import session_repository
 from .audit_repository import log_event
@@ -23,67 +17,59 @@ from .audit_repository import log_event
 
 class SessionEngine:
 
-    # ============================================================
-    #      MOTOR: EXPIRACIÓN DE SESIONES ACTIVE NO COMPLETADAS
-    # ============================================================
-    def process_expired_sessions(self):
+    # ---------------------------------------------------------
+    #  Procesar expiraciones (sesiones activas que no completaron aforo)
+    # ---------------------------------------------------------
+    def process_expired_sessions(self) -> None:
         """
-        Procesa todas las sesiones activas que han excedido expires_at.
-        Si NO completaron su aforo, finaliza la sesión sin adjudicación
-        y activa la siguiente de la serie.
+        Busca sesiones activas con expires_at < ahora.
+        Las marca como finished SIN adjudicación.
+        Activa la siguiente sesión en la serie (si existe).
         """
 
-        now_iso = datetime.utcnow().isoformat()
+        now = datetime.utcnow().isoformat()
+        expired = session_repository.get_active_sessions_expired(now)
 
-        # 1. Obtener sesiones activas ya expiradas
-        expired_sessions = session_repository.get_active_sessions_expired(now_iso)
+        if not expired:
+            return
 
-        for session in expired_sessions:
+        for session in expired:
             session_id = session["id"]
 
-            # 2. Verificar si NO completaron aforo
-            if session["pax_registered"] < session["capacity"]:
+            # 1. Marcar finished sin adjudicación
+            session_repository.mark_session_as_finished_without_award(
+                session_id=session_id,
+                finished_at=now
+            )
 
-                # 2.1 Marcar sesión como finalizada SIN adjudicar
-                session_repository.mark_session_as_finished_without_award(
-                    session_id=session_id,
-                    finished_at=now_iso
-                )
+            log_event(
+                action="session_expired",
+                session_id=session_id,
+                metadata={"expires_at": session.get("expires_at")}
+            )
 
-                log_event(
-                    action="session_expired_without_award",
-                    session_id=session_id,
-                    metadata={
-                        "pax_registered": session["pax_registered"],
-                        "capacity": session["capacity"],
-                        "expires_at": session["expires_at"]
-                    }
-                )
+            # 2. Activar siguiente sesión de la serie
+            self.activate_next_session_in_series(session)
 
-                # 2.2 Rolling: activar la siguiente sesión de la serie
-                self.activate_next_session_in_series(session)
-
-            # Si completó aforo pero aun así aparece como expirada:
-            # (caso extremo por desorden temporal)
-            else:
-                log_event(
-                    action="session_expired_but_full_capacity",
-                    session_id=session_id
-                )
-
-    # ============================================================
-    #     MOTOR: ACTIVAR SIGUIENTE SESIÓN DE LA SERIE (ROLLING)
-    # ============================================================
+    # ---------------------------------------------------------
+    #  Activar siguiente sesión en la serie
+    # ---------------------------------------------------------
     def activate_next_session_in_series(self, session: Dict) -> Optional[Dict]:
         """
-        Activa la siguiente sesión parked de la misma serie.
-        sequence_number > sesión actual.
+        Busca siguiente sesión parked:
+        - mismo series_id
+        - sequence_number > actual
+        - status = parked
+        Activa la de menor sequence_number.
+
+        Devuelve la sesión activada o None.
         """
 
         next_session = session_repository.get_next_session_in_series(session)
+
         if not next_session:
             log_event(
-                action="no_next_session_in_series",
+                action="rolling_no_next_session",
                 session_id=session["id"],
                 metadata={
                     "series_id": session.get("series_id"),
@@ -92,26 +78,19 @@ class SessionEngine:
             )
             return None
 
-        # Activación estándar: duración 5 días desde ahora
-        now = datetime.utcnow()
-        expires_at = (now + timedelta(days=5)).isoformat()
-
-        activated = session_repository.activate_session(
-            session_id=next_session["id"],
-            expires_at=expires_at
-        )
+        activated = session_repository.activate_session(next_session["id"])
 
         log_event(
-            action="next_session_activated",
-            session_id=next_session["id"],
+            action="rolling_session_activated",
+            session_id=session["id"],
             metadata={
-                "series_id": session.get("series_id"),
-                "previous_session_id": session["id"]
+                "activated_session_id": next_session["id"],
+                "next_sequence": next_session["sequence_number"]
             }
         )
 
         return activated
 
 
-# Instancia exportable
+# Instancia global usada en el backend
 session_engine = SessionEngine()
