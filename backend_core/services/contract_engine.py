@@ -1,200 +1,180 @@
 """
 contract_engine.py
-Motor contractual de la sesión de compra colectiva.
+Motor contractual de Compra Abierta.
 
-Este módulo NO mueve dinero ni habla directamente con la Fintech.
-Su función es:
+Responsabilidades:
+- Verificar que todos los depósitos de la sesión están autorizados.
+- Activar adjudicación determinista cuando:
+    * sesión tiene aforo completo
+    * todos los depósitos están "AUTHORIZED"
+- Integrarse con wallet_orchestrator / fintech en pasos posteriores
+- Gestionar settlement y casos de fuerza mayor
 
-- Registrar, de forma estructurada y auditable, los hitos contractuales
-  definidos en el "Contrato de participación en sesión de compra colectiva":
-
-  1) Creación de la operación contractual al adjudicar la sesión
-  2) Confirmación de que todos los depósitos son válidos
-  3) Autorización de pago al proveedor (OK de la OÜ)
-  4) Pago efectivo del proveedor (confirmado por Fintech)
-  5) Entrega / recogida del producto al adjudicatario
-  6) Caso excepcional de fuerza mayor: devolución SOLO del precio de producto
+Este módulo NO tiene imports circulares.
 """
 
+from typing import List, Dict, Optional
 from datetime import datetime
-from typing import Dict, List, Optional
 
-from .supabase_client import supabase
 from .session_repository import session_repository
+from .participant_repository import participant_repository
+from .adjudicator_engine import adjudicator_engine
 from .audit_repository import log_event
-
-
-CONTRACT_TABLE = "session_contracts"  # opcional, de momento usamos solo audit_logs
 
 
 class ContractEngine:
     """
-    Motor lógico-contractual. Toda la verdad legal queda reflejada en audit_logs.
-
-    En el futuro se puede mapear a una tabla específica (session_contracts),
-    pero de momento nos basta con eventos de auditoría bien definidos.
+    Motor contractual general del sistema.
     """
 
-    # =====================================================
-    # 1) Creación de la "operación contractual" al adjudicar
-    # =====================================================
-    def on_session_awarded(
-        self,
-        session: Dict,
-        participants: List[Dict],
-        awarded_participant: Dict,
-    ) -> None:
-        """
-        Este método se llama UNA sola vez por sesión,
-        justo después de que el motor determinista haya elegido adjudicatario.
-
-        Aquí registramos:
-        - qué sesión
-        - quiénes eran los participantes
-        - quién es el adjudicatario
-        - que la Fintech tiene los depósitos en custodia
-        """
-
-        session_id = session["id"]
-        awarded_user_id = awarded_participant["user_id"]
-
-        log_event(
-            action="contract_session_awarded",
-            session_id=session_id,
-            user_id=awarded_user_id,
-            metadata={
-                "participants": [
-                    {
-                        "participant_id": p["id"],
-                        "user_id": p["user_id"],
-                        "amount": p.get("amount"),
-                        "price": p.get("price"),
-                        "quantity": p.get("quantity"),
-                    }
-                    for p in participants
-                ],
-                "awarded_participant_id": awarded_participant["id"],
-                "awarded_user_id": awarded_user_id,
-                "contract_step": "SESSION_AWARDED",
-            }
-        )
-
-    # =====================================================
-    # 2) Confirmación: todos los depósitos OK (Fintech)
-    # =====================================================
-    def on_all_deposits_confirmed(self, session_id: str) -> None:
-        """
-        Punto de enganche cuando la Fintech confirma que TODOS los pagos
-        del grupo comprador son válidos (no hay tarjetas fallidas, chargebacks, etc).
-
-        Esta confirmación es clave: si falta un depósito, la sesión NO es válida.
-        """
-
-        log_event(
-            action="contract_all_deposits_confirmed",
-            session_id=session_id,
-            metadata={
-                "contract_step": "ALL_DEPOSITS_CONFIRMED"
-            }
-        )
-
-    # =====================================================
-    # 3) OK de la OÜ para pagar al proveedor
-    # =====================================================
-    def on_ou_authorizes_supplier_payment(self, session_id: str) -> None:
-        """
-        Punto donde la OÜ (operadora) da el visto bueno formal a la Fintech
-        para pagar la factura proforma del proveedor.
-
-        Aquí todavía NO pagamos; simplemente queda constancia de la autorización.
-        """
-
-        log_event(
-            action="contract_ou_authorizes_supplier_payment",
-            session_id=session_id,
-            metadata={
-                "contract_step": "OU_AUTHORIZES_SUPPLIER_PAYMENT"
-            }
-        )
-
-    # =====================================================
-    # 4) Pago efectivo al proveedor (Fintech)
-    # =====================================================
-    def on_supplier_paid(
+    # -----------------------------------------------------
+    # 1) Verificar si una sesión está lista para adjudicar
+    # -----------------------------------------------------
+    def _are_all_deposits_authorized(
         self,
         session_id: str,
-        proforma_invoice_id: Optional[str] = None
-    ) -> None:
+        participants: List[Dict]
+    ) -> bool:
         """
-        La Fintech confirma que ha pagado la factura (proforma o definitiva)
-        al proveedor del producto.
+        Comprueba si TODOS los participantes de la sesión
+        tienen depósitos autorizados (wallet + fintech).
 
-        En este punto, el precio del producto ha salido de la Fintech
-        hacia el proveedor.
+        Esta versión inicial se basa en:
+        - Los eventos de wallet (deposit authorized)
+        - El campo participant["deposit_status"] (si existe)
+        - Metadata del auditor (futuro)
+
+        De momento asumimos que:
+        - participant["amount"] es válido
+        - participant["deposit_status"] == "AUTHORIZED"
         """
+
+        for p in participants:
+            status = p.get("deposit_status")
+            if status != "AUTHORIZED":
+                return False
+
+        return True
+
+    # -----------------------------------------------------
+    # 2) Motor principal que chequea si se debe adjudicar
+    # -----------------------------------------------------
+    def try_adjudicate_session(self, session_id: str) -> Optional[Dict]:
+        """
+        Lógica principal del motor contractual.
+
+        Flujo:
+        - Cargar sesión
+        - Si no está 'active' o no tiene aforo completo → no adjudica
+        - Obtener lista de participantes
+        - Verificar que TODOS los depósitos están OK
+        - Llamar adjudicator_engine para seleccionar adjudicatario
+        """
+
+        session = session_repository.get_session_by_id(session_id)
+        if not session:
+            log_event("contract_error_session_not_found", session_id=session_id)
+            return None
+
+        # 1. La sesión debe estar activa
+        if session["status"] != "active":
+            log_event("contract_session_not_active", session_id=session_id)
+            return None
+
+        # 2. Debe tener aforo completo
+        capacity = session.get("capacity")
+        registered = session.get("pax_registered")
+
+        if registered != capacity:
+            log_event(
+                "contract_not_full_capacity",
+                session_id=session_id,
+                metadata={"registered": registered, "capacity": capacity}
+            )
+            return None
+
+        # 3. Obtener todos los participantes
+        participants = participant_repository.get_participants_by_session(session_id)
+        if not participants:
+            log_event("contract_no_participants", session_id=session_id)
+            return None
+
+        # 4. Verificar depósitos autorizados
+        if not self._are_all_deposits_authorized(session_id, participants):
+            log_event(
+                "contract_deposits_not_authorized",
+                session_id=session_id,
+                metadata={"participants": len(participants)}
+            )
+            return None
+
+        # 5. Ejecutar adjudicación determinista
+        adjudicatario = adjudicator_engine.adjudicate_session(session_id)
+
+        if not adjudicatario:
+            log_event("contract_adjudication_failed", session_id=session_id)
+            return None
+
+        # 6. Marcar sesión como finalizada
+        now = datetime.utcnow().isoformat()
+        session_repository.mark_session_as_finished(session_id, now)
 
         log_event(
-            action="contract_supplier_paid",
+            "contract_adjudication_completed",
             session_id=session_id,
-            metadata={
-                "contract_step": "SUPPLIER_PAID",
-                "proforma_invoice_id": proforma_invoice_id,
-            }
+            metadata={"awarded_user_id": adjudicatario["user_id"]}
         )
 
-    # =====================================================
-    # 5) Entrega / recogida del producto por el adjudicatario
-    # =====================================================
-    def on_product_delivered(
+        return adjudicatario
+
+    # -----------------------------------------------------
+    # 3) Liquidación final tras adjudicación
+    # -----------------------------------------------------
+    def on_settlement_completed(
         self,
         session_id: str,
-        awarded_user_id: str
-    ) -> None:
+        adjudicatario_id: str,
+        fintech_batch_id: str,
+    ):
         """
-        DMHG confirma que el adjudicatario ha recogido el producto en tienda
-        (o lo ha recibido, si en el futuro contemplamos envíos).
-
-        Muy importante a efectos de cierre definitivo de la operación.
+        Se llama cuando la Fintech confirma liquidación:
+        - Pago al proveedor
+        - Pago comisiones
+        - Pago gastos de gestión
         """
 
         log_event(
-            action="contract_product_delivered",
+            "contract_settlement_completed",
             session_id=session_id,
-            user_id=awarded_user_id,
-            metadata={
-                "contract_step": "PRODUCT_DELIVERED"
-            }
+            user_id=adjudicatario_id,
+            metadata={"fintech_batch_id": fintech_batch_id}
         )
 
-    # =====================================================
-    # 6) Caso excepcional: fuerza mayor, proveedor no entrega
-    # =====================================================
-    def on_force_majeure_refund_product_price(
+    # -----------------------------------------------------
+    # 4) Caso de fuerza mayor (solo se devuelve el precio)
+    # -----------------------------------------------------
+    def on_force_majeure_refund(
         self,
         session_id: str,
-        awarded_user_id: str,
-        product_price_amount: float,
-    ) -> None:
+        adjudicatario_id: str,
+        product_amount: float,
+        currency: str,
+        reason: Optional[str]
+    ):
         """
-        ESCENARIO EXCEPCIONAL:
-
-        - El proveedor no puede entregar el producto (fuerza mayor, cierre, etc).
-        - La OÜ decide activar la cláusula de fuerza mayor/resolución.
-        - La Fintech devuelve SOLO el importe del PRECIO DEL PRODUCTO
-          al adjudicatario final.
-
-        NO se devuelven:
-        - comisión OÜ
-        - gastos de gestión
+        El proveedor NO puede entregar el producto.
+        La Fintech devuelve al adjudicatario:
+        - Solo precio del producto
         """
 
         log_event(
-            action="contract_force_majeure_refund_product_price",
+            "contract_force_majeure",
             session_id=session_id,
-            user_id=awarded_user_id,
+            user_id=adjudicatario_id,
             metadata={
-                "contract_step": "FORCE_MAJEURE_REFUND_PRODUCT_PRICE",
-                "refund_amount_product_price": product_price_amount,
+                "product_amount": product_amount,
+                "currency": currency,
+                "reason": reason,
             }
         )
 
