@@ -1,74 +1,54 @@
-# tests/test_wallet_events.py
-
 import pytest
 from unittest.mock import patch
-
-from backend_core.services.wallet_events import (
-    emit_deposit_authorized,
-    emit_settlement_executed,
-    emit_force_majeure_refund,
-)
-
-# ---------------------------------------------------------
-# Helper para mockear auditoría
-# ---------------------------------------------------------
-
-@pytest.fixture
-def mock_log_event():
-    with patch("backend_core.services.wallet_events.log_event") as mock:
-        yield mock
+from backend_core.services import wallet_events
 
 
-# ---------------------------------------------------------
-# Tests
-# ---------------------------------------------------------
-
-def test_emit_deposit_authorized(mock_log_event):
-    emit_deposit_authorized(
-        session_id="S1",
-        participant_id="U1",
-        amount=30.0,
+@patch("backend_core.services.wallet_events.log_event")
+def test_emit_deposit_authorized(mock_log):
+    wallet_events.emit_deposit_authorized(
+        session_id="s1",
+        participant_id="u1",
+        amount=30,
         currency="EUR",
         fintech_tx_id="tx123",
         status="AUTHORIZED",
     )
 
-    mock_log_event.assert_called_once()
-    call = mock_log_event.call_args.kwargs
+    mock_log.assert_called_once()
+    args, kwargs = mock_log.call_args
+    assert kwargs["action"] == "wallet_deposit_authorized"
+    assert kwargs["session_id"] == "s1"
+    assert kwargs["user_id"] == "u1"
+    assert kwargs["metadata"]["amount"] == 30
 
-    assert call["action"] == "wallet_deposit_authorized"
-    assert call["session_id"] == "S1"
-    assert call["user_id"] == "U1"
-    assert call["metadata"]["amount"] == 30.0
 
-
-def test_emit_settlement_executed(mock_log_event):
-    emit_settlement_executed(
-        session_id="S1",
-        adjudicatario_id="U9",
-        fintech_batch_id="batch77",
+@patch("backend_core.services.wallet_events.log_event")
+def test_emit_settlement_executed(mock_log):
+    wallet_events.emit_settlement_executed(
+        session_id="s2",
+        adjudicatario_id="u9",
+        fintech_batch_id="batch001",
         status="SETTLED",
     )
 
-    mock_log_event.assert_called_once()
-    call = mock_log_event.call_args.kwargs
+    mock_log.assert_called_once()
+    args, kwargs = mock_log.call_args
+    assert kwargs["action"] == "wallet_settlement_executed"
+    assert kwargs["metadata"]["fintech_batch_id"] == "batch001"
 
-    assert call["action"] == "wallet_settlement_executed"
-    assert call["metadata"]["fintech_batch_id"] == "batch77"
 
-
-def test_emit_force_majeure_refund(mock_log_event):
-    emit_force_majeure_refund(
-        session_id="S1",
-        adjudicatario_id="U9",
-        product_amount=300.0,
+@patch("backend_core.services.wallet_events.log_event")
+def test_emit_force_majeure_refund(mock_log):
+    wallet_events.emit_force_majeure_refund(
+        session_id="s3",
+        adjudicatario_id="u5",
+        product_amount=300,
         currency="EUR",
-        fintech_refund_tx_id="rf123",
-        reason="Stock irreversible",
+        fintech_refund_tx_id="rf001",
+        reason="Stock"
     )
 
-    mock_log_event.assert_called_once()
-    call = mock_log_event.call_args.kwargs
-
-    assert call["action"] == "wallet_force_majeure_refund"
-    assert call["metadata"]["product_amount"] == 300.0
+    mock_log.assert_called_once()
+    args, kwargs = mock_log.call_args
+    assert kwargs["action"] == "wallet_force_majeure_refund"
+    assert kwargs["metadata"]["product_amount"] == 300
