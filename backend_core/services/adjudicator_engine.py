@@ -2,26 +2,34 @@
 adjudicator_engine.py
 Motor de adjudicación determinista de sesiones Compra Abierta.
 
-Reglas fundamentales aplicadas aquí:
-- La adjudicación sólo ocurre cuando AFORO = 100%
-- Si la sesión no completó aforo antes de expires_at → NO se adjudica
-- El adjudicatario se selecciona de forma determinista mediante:
+Reglas fundamentales:
+- Solo adjudica si AFORO = 100%
+- Si la sesión está expirada → NO adjudica
+- Selección determinista mediante:
     - seed pública (si existe)
-    - seed interna reproducible
+    - seed interna derivada de la sesión
     - SHA256(seed efectiva) % capacity
 - Tras adjudicar:
-    - la sesión se marca como finished
-    - se activa la siguiente sesión de la serie (rolling)
-    - se registra auditoría completa y verificable
+    - marca la sesión como finished
+    - activa la siguiente sesión de la serie (rolling)
+    - registra auditoría completa
+
+IMPORTANTE: para evitar imports circulares,
+este módulo NO importa participant_repository.
+Trabaja directamente sobre la tabla session_participants vía supabase.
 """
 
 import hashlib
 from datetime import datetime
+
+from .supabase_client import supabase
 from .session_repository import session_repository
-from .participant_repository import participant_repository
 from .adjudicator_repository import adjudicator_repository
 from .session_engine import session_engine
 from .audit_repository import log_event
+
+
+PARTICIPANT_TABLE = "session_participants"
 
 
 class AdjudicatorEngine:
@@ -31,7 +39,8 @@ class AdjudicatorEngine:
     # ================================================================
     def adjudicate_session(self, session_id: str):
         """
-        Motor determinista completo.
+        Ejecuta el motor determinista de adjudicación para una sesión concreta.
+        Devuelve el participante ganador (dict) o None si no adjudica.
         """
 
         # ------------------------------------------------------------
@@ -41,76 +50,93 @@ class AdjudicatorEngine:
         if not session:
             log_event(
                 action="adjudication_error_session_not_found",
-                session_id=session_id
+                session_id=session_id,
             )
             return None
 
         # ------------------------------------------------------------
         # 2. Validar precondiciones
         # ------------------------------------------------------------
-        if session["status"] != "active":
+        if session.get("status") != "active":
             log_event(
                 action="adjudication_skipped_invalid_status",
                 session_id=session_id,
-                metadata={"status": session["status"]}
+                metadata={"status": session.get("status")},
             )
             return None
 
         if session.get("finished_at"):
             log_event(
                 action="adjudication_skipped_already_finished",
-                session_id=session_id
+                session_id=session_id,
             )
             return None
 
-        if session["pax_registered"] != session["capacity"]:
+        if session.get("pax_registered") != session.get("capacity"):
             log_event(
                 action="adjudication_skipped_incomplete_capacity",
                 session_id=session_id,
                 metadata={
-                    "pax_registered": session["pax_registered"],
-                    "capacity": session["capacity"]
-                }
+                    "pax_registered": session.get("pax_registered"),
+                    "capacity": session.get("capacity"),
+                },
             )
             return None
 
-        if session["expires_at"] <= datetime.utcnow().isoformat():
+        now_iso = datetime.utcnow().isoformat()
+        expires_at = session.get("expires_at")
+
+        if expires_at and expires_at <= now_iso:
             log_event(
                 action="adjudication_skipped_already_expired",
                 session_id=session_id,
-                metadata={"expires_at": session["expires_at"]}
+                metadata={"expires_at": expires_at},
             )
             return None
 
-        if participant_repository.exists_awarded_participant(session_id):
+        # ¿Ya hay adjudicatario?
+        awarded_resp = (
+            supabase.table(PARTICIPANT_TABLE)
+            .select("id")
+            .eq("session_id", session_id)
+            .eq("is_awarded", True)
+            .execute()
+        )
+        if awarded_resp.data:
             log_event(
                 action="adjudication_skipped_already_awarded",
-                session_id=session_id
+                session_id=session_id,
             )
             return None
 
         # ------------------------------------------------------------
         # 3. Cargar participantes
         # ------------------------------------------------------------
-        participants = participant_repository.get_participants_by_session(session_id)
+        participants_resp = (
+            supabase.table(PARTICIPANT_TABLE)
+            .select("*")
+            .eq("session_id", session_id)
+            .execute()
+        )
 
-        if len(participants) != session["capacity"]:
+        participants = participants_resp.data or []
+
+        if len(participants) != session.get("capacity"):
             log_event(
                 action="adjudication_error_capacity_mismatch",
                 session_id=session_id,
                 metadata={
                     "participants_len": len(participants),
-                    "capacity": session["capacity"]
-                }
+                    "capacity": session.get("capacity"),
+                },
             )
             return None
 
         # Orden determinista absoluta
         participants_sorted = sorted(
             participants,
-            key=lambda p: (p["created_at"], p["id"])
+            key=lambda p: (p.get("created_at"), p.get("id")),
         )
-
         N = len(participants_sorted)
 
         # ------------------------------------------------------------
@@ -124,7 +150,7 @@ class AdjudicatorEngine:
         effective_seed = self._build_effective_seed(session, public_seed)
 
         # ------------------------------------------------------------
-        # 6. Calcular el índice ganador determinista
+        # 6. Calcular índice ganador
         # ------------------------------------------------------------
         winner_index = self._compute_winner_index(effective_seed, N)
 
@@ -134,42 +160,44 @@ class AdjudicatorEngine:
         winner = participants_sorted[winner_index]
 
         # ------------------------------------------------------------
-        # 8. Guardar adjudicación y cerrar sesión
+        # 8. Persistir adjudicación y cerrar sesión
         # ------------------------------------------------------------
-        now = datetime.utcnow().isoformat()
+        awarded_at = datetime.utcnow().isoformat()
 
-        participant_repository.mark_as_awarded(
-            participant_id=winner["id"],
-            awarded_at=now
+        # 8.1 Marcar ganador en tabla de participantes
+        (
+            supabase.table(PARTICIPANT_TABLE)
+            .update({"is_awarded": True, "awarded_at": awarded_at})
+            .eq("id", winner["id"])
+            .execute()
         )
 
+        # 8.2 Marcar sesión como finished
         session_repository.mark_session_as_finished(
             session_id=session_id,
-            finished_at=now
+            finished_at=awarded_at,
         )
 
-        # ------------------------------------------------------------
-        # 9. Auditoría completa y trazable
-        # ------------------------------------------------------------
+        # 8.3 Auditoría detallada
         log_event(
             action="session_adjudicated",
             session_id=session_id,
-            user_id=winner["user_id"],
-            organization_id=session["organization_id"],
+            user_id=winner.get("user_id"),
+            organization_id=session.get("organization_id"),
             metadata={
-                "winner_participant_id": winner["id"],
-                "winner_user_id": winner["user_id"],
+                "winner_participant_id": winner.get("id"),
+                "winner_user_id": winner.get("user_id"),
                 "winner_index": winner_index,
-                "capacity": session["capacity"],
+                "capacity": session.get("capacity"),
                 "participants_count": N,
                 "public_seed": public_seed,
                 "effective_seed": effective_seed,
-                "hash_algorithm": "SHA256"
-            }
+                "hash_algorithm": "SHA256",
+            },
         )
 
         # ------------------------------------------------------------
-        # 10. Rolling: activar siguiente sesión
+        # 9. Rolling: activar siguiente sesión
         # ------------------------------------------------------------
         session_engine.activate_next_session_in_series(session)
 
@@ -178,15 +206,15 @@ class AdjudicatorEngine:
     # ================================================================
     #               FUNCIONES AUXILIARES DEL MOTOR
     # ================================================================
-    def _build_effective_seed(self, session, public_seed: str | None) -> str:
+    def _build_effective_seed(self, session: dict, public_seed: str | None) -> str:
         base = (
-            f"SESSION:{session['id']}"
-            f"|SERIES:{session['series_id']}"
-            f"|SEQ:{session['sequence_number']}"
-            f"|PRODUCT:{session['product_id']}"
-            f"|ORG:{session['organization_id']}"
-            f"|ACTIVATED_AT:{session['activated_at']}"
-            f"|CAPACITY:{session['capacity']}"
+            f"SESSION:{session.get('id')}"
+            f"|SERIES:{session.get('series_id')}"
+            f"|SEQ:{session.get('sequence_number')}"
+            f"|PRODUCT:{session.get('product_id')}"
+            f"|ORG:{session.get('organization_id')}"
+            f"|ACTIVATED_AT:{session.get('activated_at')}"
+            f"|CAPACITY:{session.get('capacity')}"
         )
 
         if public_seed:
