@@ -22,7 +22,7 @@ from .session_engine import session_engine
 from .audit_repository import log_event
 
 
-PARTICIPANT_TABLE = "session_participants"
+PARTICIPANT_TABLE = "ca_session_participants"
 
 
 class AdjudicatorEngine:
@@ -40,7 +40,7 @@ class AdjudicatorEngine:
         if not session:
             log_event(
                 action="adjudication_error_session_not_found",
-                session_id=session_id
+                session_id=session_id,
             )
             return None
 
@@ -49,7 +49,7 @@ class AdjudicatorEngine:
             log_event(
                 action="adjudication_skipped_session_not_active",
                 session_id=session_id,
-                metadata={"status": session["status"]}
+                metadata={"status": session["status"]},
             )
             return None
 
@@ -58,7 +58,7 @@ class AdjudicatorEngine:
         if not participants:
             log_event(
                 action="adjudication_error_no_participants",
-                session_id=session_id
+                session_id=session_id,
             )
             return None
 
@@ -74,7 +74,7 @@ class AdjudicatorEngine:
                     "pax_registered": pax_registered,
                     "participants_count": len(participants),
                     "capacity": capacity,
-                }
+                },
             )
             return None
 
@@ -85,7 +85,7 @@ class AdjudicatorEngine:
             log_event(
                 action="adjudication_skipped_session_expired",
                 session_id=session_id,
-                metadata={"expires_at": expires_at}
+                metadata={"expires_at": expires_at},
             )
             return None
 
@@ -107,8 +107,8 @@ class AdjudicatorEngine:
             metadata={
                 "awarded_participant_id": awarded_participant["id"],
                 "index": index,
-                "capacity": capacity
-            }
+                "capacity": capacity,
+            },
         )
 
         # 8) Rolling: activar siguiente sesión de la serie
@@ -117,6 +117,7 @@ class AdjudicatorEngine:
         # 9) Motor contractual (import diferido → NO hay ciclo)
         try:
             from .contract_engine import contract_engine
+
             contract_engine.on_session_awarded(
                 session=session,
                 participants=participants,
@@ -126,7 +127,7 @@ class AdjudicatorEngine:
             log_event(
                 action="contract_engine_call_failed",
                 session_id=session_id,
-                metadata={"error": str(e)}
+                metadata={"error": str(e)},
             )
 
         return awarded_participant
@@ -140,7 +141,7 @@ class AdjudicatorEngine:
             .table(PARTICIPANT_TABLE)
             .select("*")
             .eq("session_id", session_id)
-            .order("created_at", asc=True)
+            .order("created_at")
             .execute()
         )
         return response.data or []
@@ -154,7 +155,7 @@ class AdjudicatorEngine:
             .table(PARTICIPANT_TABLE)
             .update({
                 "is_awarded": True,
-                "awarded_at": awarded_at
+                "awarded_at": awarded_at,
             })
             .eq("id", participant_id)
             .execute()
@@ -162,7 +163,7 @@ class AdjudicatorEngine:
 
         log_event(
             action="participant_marked_awarded",
-            metadata={"participant_id": participant_id, "awarded_at": awarded_at}
+            metadata={"participant_id": participant_id, "awarded_at": awarded_at},
         )
 
     # ---------------------------------------------------------
@@ -171,7 +172,7 @@ class AdjudicatorEngine:
     def _compute_deterministic_index(
         self,
         session: Dict,
-        participants: List[Dict]
+        participants: List[Dict],
     ) -> int:
 
         session_id = session["id"]
@@ -184,12 +185,14 @@ class AdjudicatorEngine:
 
         # Base determinista
         participant_ids = [p["id"] for p in participants]
-        base_material = "|".join([
-            session_id,
-            series_id,
-            str(sequence_number),
-            "|".join(participant_ids),
-        ])
+        base_material = "|".join(
+            [
+                session_id,
+                series_id,
+                str(sequence_number),
+                "|".join(participant_ids),
+            ]
+        )
 
         combined = public_seed_str + "|" + base_material
         digest = hashlib.sha256(combined.encode("utf-8")).hexdigest()
@@ -203,11 +206,13 @@ class AdjudicatorEngine:
             session_id=session_id,
             metadata={
                 "public_seed": public_seed_str,
-                "base_material_hash": hashlib.sha256(base_material.encode("utf-8")).hexdigest(),
+                "base_material_hash": hashlib.sha256(
+                    base_material.encode("utf-8")
+                ).hexdigest(),
                 "digest": digest,
                 "value_mod_capacity": index,
                 "capacity": capacity,
-            }
+            },
         )
 
         return index
