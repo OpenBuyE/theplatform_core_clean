@@ -79,7 +79,7 @@ class ParticipantRepository:
                 "price": price,
                 "quantity": quantity,
                 "is_awarded": False,
-                "created_at": now
+                "created_at": now,
             })
             .execute()
         )
@@ -88,7 +88,7 @@ class ParticipantRepository:
             log_event(
                 action="participant_insert_error",
                 session_id=session_id,
-                user_id=user_id
+                user_id=user_id,
             )
             return None
 
@@ -98,7 +98,7 @@ class ParticipantRepository:
             action="participant_added",
             session_id=session_id,
             user_id=user_id,
-            metadata={"participant_id": participant["id"]}
+            metadata={"participant_id": participant["id"]},
         )
 
         # 2. Incrementar pax_registered
@@ -109,14 +109,15 @@ class ParticipantRepository:
         if not session:
             log_event(
                 action="participant_added_session_not_found",
-                session_id=session_id
+                session_id=session_id,
             )
             return participant
 
-        # 4. Si aforo completo → adjudicar
+        # 4. Si aforo completo y no expirada → adjudicar
+        now_iso = datetime.utcnow().isoformat()
         if (
-            session["pax_registered"] == session["capacity"]
-            and session["expires_at"] > datetime.utcnow().isoformat()
+            session.get("pax_registered") == session.get("capacity")
+            and (session.get("expires_at") is None or session["expires_at"] > now_iso)
         ):
             adjudicator_engine.adjudicate_session(session_id)
 
@@ -131,7 +132,7 @@ class ParticipantRepository:
             .table(PARTICIPANT_TABLE)
             .update({
                 "is_awarded": True,
-                "awarded_at": awarded_at
+                "awarded_at": awarded_at,
             })
             .eq("id", participant_id)
             .execute()
@@ -140,9 +141,12 @@ class ParticipantRepository:
         log_event(
             action="participant_marked_awarded",
             session_id=None,
-            metadata={"participant_id": participant_id}
+            metadata={
+                "participant_id": participant_id,
+                "awarded_at": awarded_at,
+            },
         )
 
 
-# Instancia global exportable
+# Instancia exportable
 participant_repository = ParticipantRepository()
