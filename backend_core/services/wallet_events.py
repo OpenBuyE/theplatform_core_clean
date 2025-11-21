@@ -1,25 +1,25 @@
 """
 wallet_events.py
-Capa de eventos estructurados para wallet / fintech.
+Capa de eventos estructurados del Wallet para Compra Abierta.
 
-Cada evento:
-- Se registra en audit_logs (trazabilidad total).
-- Estandariza el formato del dato financiero.
-- Deja preparado el punto para ser consumido por
-  motor contractual, panel, o futuros workers.
+Responsabilidad:
+- Registrar de forma consistente todos los eventos relacionados con la Fintech.
+- NO contiene lógica de negocio.
+- NO modifica sesiones ni participantes.
+- Todos los eventos van al audit_log para trazabilidad completa.
 
-Los nombres de los eventos son explícitos y NO usan
-terminología de juegos de azar.
+Eventos incluidos:
+1) Depósito autorizado
+2) Liquidación ejecutada
+3) Reembolso por fuerza mayor
 """
 
-from typing import Optional
-from .audit_repository import log_event
+from backend_core.services.audit_repository import log_event
 
 
-# ---------------------------------------------------------
-# 1) Depósito autorizado por la Fintech
-# ---------------------------------------------------------
-
+# -----------------------------------------------------
+# 1) DEPÓSITO AUTORIZADO
+# -----------------------------------------------------
 def emit_deposit_authorized(
     session_id: str,
     participant_id: str,
@@ -29,7 +29,7 @@ def emit_deposit_authorized(
     status: str,
 ) -> None:
     """
-    Evento: la Fintech confirma que un depósito está bloqueado/autorizado.
+    Evento emitido cuando la Fintech autoriza y bloquea un depósito.
     """
     log_event(
         action="wallet_deposit_authorized",
@@ -44,10 +44,9 @@ def emit_deposit_authorized(
     )
 
 
-# ---------------------------------------------------------
-# 2) Liquidación ejecutada por la Fintech
-# ---------------------------------------------------------
-
+# -----------------------------------------------------
+# 2) LIQUIDACIÓN EJECUTADA (Proveedor + OÜ + DMHG)
+# -----------------------------------------------------
 def emit_settlement_executed(
     session_id: str,
     adjudicatario_id: str,
@@ -55,7 +54,10 @@ def emit_settlement_executed(
     status: str,
 ) -> None:
     """
-    Evento: Fintech ha liquidado fondos hacia proveedor + OÜ + DMHG.
+    Evento emitido cuando la Fintech liquida:
+    - Pago a proveedor
+    - Comisión para la OÜ
+    - Gastos de gestión para DMHG (España)
     """
     log_event(
         action="wallet_settlement_executed",
@@ -68,21 +70,21 @@ def emit_settlement_executed(
     )
 
 
-# ---------------------------------------------------------
-# 3) Fuerza mayor: devolución al adjudicatario del precio del producto
-# ---------------------------------------------------------
-
+# -----------------------------------------------------
+# 3) REEMBOLSO POR FUERZA MAYOR
+# -----------------------------------------------------
 def emit_force_majeure_refund(
     session_id: str,
     adjudicatario_id: str,
     product_amount: float,
     currency: str,
-    fintech_refund_tx_id: Optional[str],
-    reason: Optional[str],
+    fintech_refund_tx_id: str | None,
+    reason: str | None,
 ) -> None:
     """
-    Evento: la Fintech devuelve al adjudicatario el importe del producto
-    por imposibilidad de entrega.
+    Evento emitido cuando el proveedor NO puede entregar el producto.
+    - Solo se devuelve el precio del producto al adjudicatario.
+    - NO se devuelve comisión ni gastos de gestión.
     """
     log_event(
         action="wallet_force_majeure_refund",
