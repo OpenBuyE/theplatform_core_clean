@@ -1,19 +1,15 @@
 """
 audit_repository.py
-Sistema de auditoría centralizado para Compra Abierta.
-
-Usa la tabla:
+Sistema de auditoría basado en la tabla:
     ca_audit_logs
 
 Esquema:
-
-| id          | uuid (PK)
-| action      | text (NOT NULL)
-| session_id  | uuid (NULL)
-| user_id     | text (NULL)
-| metadata    | jsonb (NULL)
-| created_at  | timestamptz (DEFAULT now())
-
+- id (uuid, PK)
+- action (text)
+- session_id (uuid, nullable)
+- user_id (text, nullable)
+- metadata (jsonb, nullable)
+- created_at (timestamptz, default now())
 """
 
 from datetime import datetime
@@ -21,16 +17,17 @@ from typing import Optional, Dict, Any, List
 
 from .supabase_client import supabase
 
+
 AUDIT_TABLE = "ca_audit_logs"
 
 
 class AuditRepository:
     """
-    Repositorio centralizado de auditoría.
+    Encapsula toda la lógica de auditoría.
     """
 
     # ---------------------------------------------------------
-    # Registrar un evento de auditoría
+    # Registrar un evento en auditoría
     # ---------------------------------------------------------
     def log_event(
         self,
@@ -48,12 +45,17 @@ class AuditRepository:
             "created_at": datetime.utcnow().isoformat()
         }
 
+        # Insertar en Supabase
         supabase.table(AUDIT_TABLE).insert(entry).execute()
 
     # ---------------------------------------------------------
-    # Obtener eventos recientes (para el panel)
+    # Obtener logs (para el panel)
     # ---------------------------------------------------------
-    def fetch_logs(self, limit: int = 200) -> List[Dict[str, Any]]:
+    def fetch_logs(
+        self,
+        limit: int = 200
+    ) -> List[Dict[str, Any]]:
+
         response = (
             supabase
             .table(AUDIT_TABLE)
@@ -66,5 +68,19 @@ class AuditRepository:
         return response.data or []
 
 
-# Instancia global requerida por el panel
+# Instancia global (igual que el patrón que usamos en todo el backend)
 audit_repository = AuditRepository()
+
+# Función directa (para mantener compatibilidad con el backend actual)
+def log_event(
+    action: str,
+    session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None
+) -> None:
+    audit_repository.log_event(
+        action=action,
+        session_id=session_id,
+        user_id=user_id,
+        metadata=metadata,
+    )
