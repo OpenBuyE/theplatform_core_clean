@@ -1,86 +1,81 @@
 """
 audit_repository.py
-Sistema de auditoría basado en la tabla:
-    ca_audit_logs
+Sistema de auditoría estable usando la tabla ca_audit_logs.
 
-Esquema:
-- id (uuid, PK)
-- action (text)
-- session_id (uuid, nullable)
-- user_id (text, nullable)
-- metadata (jsonb, nullable)
-- created_at (timestamptz, default now())
+Esquema esperado:
+---------------------------------------------------------
+id          uuid (pk)
+action      text NOT NULL
+session_id  uuid NULL
+user_id     text NULL
+metadata    jsonb NULL
+created_at  timestamptz DEFAULT now()
+---------------------------------------------------------
+
+Funciones expuestas:
+
+- log_event(action, session_id=None, user_id=None, metadata=None)
+- fetch_logs(limit=200)
 """
 
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
 
 from .supabase_client import supabase
-
 
 AUDIT_TABLE = "ca_audit_logs"
 
 
 class AuditRepository:
     """
-    Encapsula toda la lógica de auditoría.
+    Repositorio principal para logs de auditoría.
     """
 
     # ---------------------------------------------------------
-    # Registrar un evento en auditoría
+    # Insertar un log
     # ---------------------------------------------------------
     def log_event(
         self,
         action: str,
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-
         entry = {
             "action": action,
             "session_id": session_id,
             "user_id": user_id,
             "metadata": metadata or {},
-            "created_at": datetime.utcnow().isoformat()
+            "created_at": datetime.utcnow().isoformat(),
         }
 
-        # Insertar en Supabase
-        supabase.table(AUDIT_TABLE).insert(entry).execute()
+        try:
+            supabase.table(AUDIT_TABLE).insert(entry).execute()
+        except Exception as e:
+            print("ERROR inserting into audit logs:", e)
 
     # ---------------------------------------------------------
-    # Obtener logs (para el panel)
+    # Obtener logs para el panel
     # ---------------------------------------------------------
-    def fetch_logs(
-        self,
-        limit: int = 200
-    ) -> List[Dict[str, Any]]:
+    def fetch_logs(self, limit: int = 200) -> List[Dict]:
+        try:
+            response = (
+                supabase
+                .table(AUDIT_TABLE)
+                .select("*")
+                .order("created_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            return response.data or []
+        except Exception as e:
+            print("ERROR fetching audit logs:", e)
+            return []
 
-        response = (
-            supabase
-            .table(AUDIT_TABLE)
-            .select("*")
-            .order("created_at", desc=True)
-            .limit(limit)
-            .execute()
-        )
 
-        return response.data or []
-
-
-# Instancia global (igual que el patrón que usamos en todo el backend)
+# Instancia global utilizada por todo el backend
 audit_repository = AuditRepository()
 
-# Función directa (para mantener compatibilidad con el backend actual)
-def log_event(
-    action: str,
-    session_id: Optional[str] = None,
-    user_id: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None
-) -> None:
-    audit_repository.log_event(
-        action=action,
-        session_id=session_id,
-        user_id=user_id,
-        metadata=metadata,
-    )
+# Alias directo para compatibilidad con views antiguas:
+log_event = audit_repository.log_event
+fetch_logs = audit_repository.fetch_logs
