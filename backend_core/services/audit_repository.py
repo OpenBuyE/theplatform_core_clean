@@ -1,70 +1,99 @@
 """
 audit_repository.py
-Auditoría completa del sistema Compra Abierta.
+Gestión centralizada de logs para Compra Abierta,
+almacenados en la tabla ca_audit_logs.
 
-Funciones:
-- log_event: registrar acciones del sistema
-- fetch_logs: obtener logs para el panel
+Estructura tabla:
+- id (uuid)
+- action (text)
+- session_id (uuid, nullable)
+- user_id (text, nullable)
+- metadata (jsonb, nullable)
+- created_at (timestamptz default now())
 """
 
 from datetime import datetime
-from typing import Optional, Dict, List
+from typing import Optional, Dict, Any, List
 
 from .supabase_client import supabase
 
-AUDIT_TABLE = "audit_logs"
+AUDIT_TABLE = "ca_audit_logs"
 
 
-class AuditRepository:
+# ---------------------------------------------------------
+#  Insertar evento de auditoría
+# ---------------------------------------------------------
+def log_event(
+    action: str,
+    session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None
+) -> None:
+    """
+    Inserta un log en la tabla ca_audit_logs.
+    Es tolerante a errores para no romper el flujo del backend.
+    """
 
-    # ---------------------------------------------------------
-    # REGISTRAR EVENTO DE AUDITORÍA
-    # ---------------------------------------------------------
-    def log_event(
-        self,
-        action: str,
-        session_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        metadata: Optional[Dict] = None
-    ) -> None:
+    entry = {
+        "action": action,
+        "session_id": session_id,
+        "user_id": user_id,
+        "metadata": metadata or {},
+        "created_at": datetime.utcnow().isoformat(),
+    }
 
-        entry = {
-            "action": action,
-            "session_id": session_id,
-            "user_id": user_id,
-            "metadata": metadata or {},
-            "created_at": datetime.utcnow().isoformat()
-        }
-
+    try:
         supabase.table(AUDIT_TABLE).insert(entry).execute()
+    except Exception as e:
+        # Si la auditoría falla, lo silenciamo  
+        # para no provocar fallos visibles en el flujo.
+        print(f"[AuditRepository] Error saving log: {e}")
 
-    # ---------------------------------------------------------
-    # OBTENER LOGS PARA EL PANEL
-    # ---------------------------------------------------------
-    def fetch_logs(
-        self,
-        limit: int = 300,
-        session_id: Optional[str] = None,
-        action: Optional[str] = None
-    ) -> List[Dict]:
 
-        query = supabase.table(AUDIT_TABLE).select("*")
+# ---------------------------------------------------------
+# Obtener logs recientes para el Panel
+# ---------------------------------------------------------
+def fetch_logs(limit: int = 200) -> List[Dict]:
+    """
+    Devuelve los últimos `limit` registros ordenados por fecha desc.
+    """
 
-        if session_id:
-            query = query.eq("session_id", session_id)
-
-        if action:
-            query = query.eq("action", action)
-
-        query = query.order("created_at", desc=True).limit(limit)
-
-        response = query.execute()
+    try:
+        response = (
+            supabase
+            .table(AUDIT_TABLE)
+            .select("*")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
         return response.data or []
 
+    except Exception as e:
+        print(f"[AuditRepository] Error fetching logs: {e}")
+        return []
 
-# Instancia global
-audit_repository = AuditRepository()
 
-# Export “log_event” para mantener compatibilidad con el panel
-log_event = audit_repository.log_event
-fetch_logs = audit_repository.fetch_logs
+# ---------------------------------------------------------
+# Obtener logs filtrados por sesión
+# ---------------------------------------------------------
+def fetch_logs_by_session(session_id: str, limit: int = 200) -> List[Dict]:
+    """
+    Devuelve logs asociados a una sesión concreta.
+    """
+
+    try:
+        response = (
+            supabase
+            .table(AUDIT_TABLE)
+            .select("*")
+            .eq("session_id", session_id)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return response.data or []
+
+    except Exception as e:
+        print(f"[AuditRepository] Error fetching logs for session {session_id}: {e}")
+        return []
