@@ -1,97 +1,134 @@
 """
 wallet_orchestrator.py
-----------------------
-Orquestador que coordina la lógica entre:
-- Smart Contract (contract_engine)
-- Sistema de sesiones
-- Fintech (MangoPay u otra)
-- Repositorios internos
+Capa de orquestación entre:
 
-Este módulo contiene la lógica "core" del movimiento de dinero,
-pero NO habla directamente con MangoPay.
-Para eso existe mangopay_client.py.
+- Fintech (MangoPay / pasarela)
+- Motor contractual (contract_engine)
+- Capa de eventos (wallet_events)
+
+En esta primera versión:
+- Recibe datos "ya validados" desde la API (fintech_routes).
+- Emite eventos de wallet (auditables).
+- Deja listo el punto para enganchar con contract_engine.
+
+Más adelante:
+- Validará consistencia de importes.
+- Verificará que TODOS los depósitos del grupo están OK
+  antes de permitir la adjudicación y la liquidación.
 """
 
-from .mangopay_adapter import mangopay
-from .contract_engine import contract_engine
-from .session_repository import session_repository
-from .audit_repository import log_event
+from typing import Dict, Any
+
+from . import wallet_events
+# En el futuro podemos conectar con el motor contractual:
+# from .contract_engine import contract_engine
 
 
 class WalletOrchestrator:
+    """
+    Orquestador principal de eventos de wallet / fintech.
+    """
 
-    # ======================================================
-    # 1) Depósito OK por parte de un participante
-    # ======================================================
-    def handle_deposit_ok(self, session_id: str, participant_id: str,
-                          amount: float, currency: str,
-                          fintech_tx_id: str, status: str):
+    # -----------------------------------------------------
+    # 1) Depósito autorizado / bloqueado en la Fintech
+    # -----------------------------------------------------
+    def handle_deposit_ok(self, data: Dict[str, Any]) -> None:
+        """
+        data esperado (viene de fintech_routes.DepositNotification.dict()):
+        {
+            "session_id": "...",
+            "participant_id": "...",
+            "amount": 30.0,
+            "currency": "EUR",
+            "fintech_tx_id": "...",
+            "status": "AUTHORIZED"
+        }
+        """
 
-        # Notificar al smart contract
-        contract_engine.on_deposit_ok(
+        session_id = data["session_id"]
+        participant_id = data["participant_id"]
+        amount = float(data["amount"])
+        currency = data.get("currency", "EUR")
+        fintech_tx_id = data.get("fintech_tx_id", "")
+        status = data.get("status", "")
+
+        # Emitimos evento estructurado
+        wallet_events.emit_deposit_authorized(
             session_id=session_id,
             participant_id=participant_id,
-            amount=amount
+            amount=amount,
+            currency=currency,
+            fintech_tx_id=fintech_tx_id,
+            status=status,
         )
 
-        log_event(
-            action="wallet_orchestrator_deposit_ok",
-            session_id=session_id,
-            user_id=participant_id,
-            metadata={
-                "fintech_tx_id": fintech_tx_id,
-                "amount": amount,
-                "currency": currency,
-                "status": status
-            }
-        )
+        # FUTURO:
+        # contract_engine.on_participant_funded(session_id, participant_id, amount, currency)
 
-    # ======================================================
-    # 2) Liquidación completada por la Fintech
-    # ======================================================
-    def handle_settlement_completed(self, session_id: str, adjudicatario_id: str,
-                                    fintech_batch_id: str, status: str):
+    # -----------------------------------------------------
+    # 2) Liquidación ejecutada por la Fintech
+    # -----------------------------------------------------
+    def handle_settlement(self, data: Dict[str, Any]) -> None:
+        """
+        data esperado (SettlementNotification.dict()):
+        {
+            "session_id": "...",
+            "adjudicatario_id": "...",
+            "fintech_batch_id": "...",
+            "status": "SETTLED"
+        }
+        """
 
-        contract_engine.on_settlement_completed(
-            session_id=session_id,
-            adjudicatario_id=adjudicatario_id
-        )
+        session_id = data["session_id"]
+        adjudicatario_id = data["adjudicatario_id"]
+        fintech_batch_id = data.get("fintech_batch_id", "")
+        status = data.get("status", "")
 
-        log_event(
-            action="wallet_orchestrator_settlement_completed",
-            session_id=session_id,
-            user_id=adjudicatario_id,
-            metadata={
-                "fintech_batch_id": fintech_batch_id,
-                "status": status
-            }
-        )
-
-    # ======================================================
-    # 3) Caso excepcional: fuerza mayor
-    # ======================================================
-    def handle_force_majeure_refund(self, session_id: str, adjudicatario_id: str,
-                                    product_amount: float, currency: str,
-                                    fintech_refund_tx_id: str | None, reason: str | None):
-
-        # Notificar al smart contract
-        contract_engine.on_force_majeure_refund(
+        wallet_events.emit_settlement_executed(
             session_id=session_id,
             adjudicatario_id=adjudicatario_id,
-            product_amount=product_amount
+            fintech_batch_id=fintech_batch_id,
+            status=status,
         )
 
-        log_event(
-            action="wallet_orchestrator_force_majeure_refund",
+        # FUTURO:
+        # contract_engine.on_settlement_completed(session_id, adjudicatario_id, fintech_batch_id)
+
+    # -----------------------------------------------------
+    # 3) Fuerza mayor: devolución del precio del producto
+    # -----------------------------------------------------
+    def handle_force_majeure_refund(self, data: Dict[str, Any]) -> None:
+        """
+        data esperado (ForceMajeureRefund.dict()):
+        {
+            "session_id": "...",
+            "adjudicatario_id": "...",
+            "product_amount": 300.0,
+            "currency": "EUR",
+            "fintech_refund_tx_id": "...." | null,
+            "reason": "Stock irreversible" | null
+        }
+        """
+
+        session_id = data["session_id"]
+        adjudicatario_id = data["adjudicatario_id"]
+        product_amount = float(data["product_amount"])
+        currency = data.get("currency", "EUR")
+        fintech_refund_tx_id = data.get("fintech_refund_tx_id")
+        reason = data.get("reason")
+
+        wallet_events.emit_force_majeure_refund(
             session_id=session_id,
-            user_id=adjudicatario_id,
-            metadata={
-                "product_amount": product_amount,
-                "currency": currency,
-                "fintech_refund_tx_id": fintech_refund_tx_id,
-                "reason": reason
-            }
+            adjudicatario_id=adjudicatario_id,
+            product_amount=product_amount,
+            currency=currency,
+            fintech_refund_tx_id=fintech_refund_tx_id,
+            reason=reason,
         )
 
+        # FUTURO:
+        # contract_engine.on_force_majeure_refund(session_id, adjudicatario_id, product_amount, currency, reason)
 
+
+# Instancia global para usar desde la API
 wallet_orchestrator = WalletOrchestrator()
