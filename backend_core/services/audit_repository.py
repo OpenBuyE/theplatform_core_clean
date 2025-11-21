@@ -1,15 +1,19 @@
 """
 audit_repository.py
-Gestión centralizada de logs para Compra Abierta,
-almacenados en la tabla ca_audit_logs.
+Sistema de auditoría centralizado para Compra Abierta.
 
-Estructura tabla:
-- id (uuid)
-- action (text)
-- session_id (uuid, nullable)
-- user_id (text, nullable)
-- metadata (jsonb, nullable)
-- created_at (timestamptz default now())
+Usa la tabla:
+    ca_audit_logs
+
+Esquema:
+
+| id          | uuid (PK)
+| action      | text (NOT NULL)
+| session_id  | uuid (NULL)
+| user_id     | text (NULL)
+| metadata    | jsonb (NULL)
+| created_at  | timestamptz (DEFAULT now())
+
 """
 
 from datetime import datetime
@@ -20,45 +24,36 @@ from .supabase_client import supabase
 AUDIT_TABLE = "ca_audit_logs"
 
 
-# ---------------------------------------------------------
-#  Insertar evento de auditoría
-# ---------------------------------------------------------
-def log_event(
-    action: str,
-    session_id: Optional[str] = None,
-    user_id: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None
-) -> None:
+class AuditRepository:
     """
-    Inserta un log en la tabla ca_audit_logs.
-    Es tolerante a errores para no romper el flujo del backend.
+    Repositorio centralizado de auditoría.
     """
 
-    entry = {
-        "action": action,
-        "session_id": session_id,
-        "user_id": user_id,
-        "metadata": metadata or {},
-        "created_at": datetime.utcnow().isoformat(),
-    }
+    # ---------------------------------------------------------
+    # Registrar un evento de auditoría
+    # ---------------------------------------------------------
+    def log_event(
+        self,
+        action: str,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> None:
 
-    try:
+        entry = {
+            "action": action,
+            "session_id": session_id,
+            "user_id": user_id,
+            "metadata": metadata or {},
+            "created_at": datetime.utcnow().isoformat()
+        }
+
         supabase.table(AUDIT_TABLE).insert(entry).execute()
-    except Exception as e:
-        # Si la auditoría falla, lo silenciamo  
-        # para no provocar fallos visibles en el flujo.
-        print(f"[AuditRepository] Error saving log: {e}")
 
-
-# ---------------------------------------------------------
-# Obtener logs recientes para el Panel
-# ---------------------------------------------------------
-def fetch_logs(limit: int = 200) -> List[Dict]:
-    """
-    Devuelve los últimos `limit` registros ordenados por fecha desc.
-    """
-
-    try:
+    # ---------------------------------------------------------
+    # Obtener eventos recientes (para el panel)
+    # ---------------------------------------------------------
+    def fetch_logs(self, limit: int = 200) -> List[Dict[str, Any]]:
         response = (
             supabase
             .table(AUDIT_TABLE)
@@ -67,33 +62,9 @@ def fetch_logs(limit: int = 200) -> List[Dict]:
             .limit(limit)
             .execute()
         )
+
         return response.data or []
 
-    except Exception as e:
-        print(f"[AuditRepository] Error fetching logs: {e}")
-        return []
 
-
-# ---------------------------------------------------------
-# Obtener logs filtrados por sesión
-# ---------------------------------------------------------
-def fetch_logs_by_session(session_id: str, limit: int = 200) -> List[Dict]:
-    """
-    Devuelve logs asociados a una sesión concreta.
-    """
-
-    try:
-        response = (
-            supabase
-            .table(AUDIT_TABLE)
-            .select("*")
-            .eq("session_id", session_id)
-            .order("created_at", desc=True)
-            .limit(limit)
-            .execute()
-        )
-        return response.data or []
-
-    except Exception as e:
-        print(f"[AuditRepository] Error fetching logs for session {session_id}: {e}")
-        return []
+# Instancia global requerida por el panel
+audit_repository = AuditRepository()
