@@ -1,131 +1,74 @@
-"""
-wallet_events.py
-Capa de eventos del wallet / fintech para Compra Abierta.
+# tests/test_wallet_events.py
 
-Objetivo:
-- Centralizar todos los eventos relacionados con:
-  * Depósitos de participantes
-  * Liquidaciones (pago proveedor + OÜ + DMHG)
-  * Casos de fuerza mayor / devoluciones excepcionales
+import pytest
+from unittest.mock import patch
 
-- Registrar SIEMPRE en audit_logs, con un naming claro y estable.
+from backend_core.services.wallet_events import (
+    emit_deposit_authorized,
+    emit_settlement_executed,
+    emit_force_majeure_refund,
+)
 
-Este módulo NO habla con MangoPay directamente.
-Eso lo hace mangopay_adapter / wallet_orchestrator.
-"""
+# ---------------------------------------------------------
+# Helper para mockear auditoría
+# ---------------------------------------------------------
 
-from typing import Optional, Dict, Any
+@pytest.fixture
+def mock_log_event():
+    with patch("backend_core.services.wallet_events.log_event") as mock:
+        yield mock
 
-from .audit_repository import log_event
 
+# ---------------------------------------------------------
+# Tests
+# ---------------------------------------------------------
 
-def _emit_wallet_event(
-    action: str,
-    session_id: Optional[str] = None,
-    user_id: Optional[str] = None,
-    organization_id: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-) -> None:
-    """
-    Helper interno para emitir eventos de wallet en audit_logs.
-    """
-
-    log_event(
-        action=action,
-        session_id=session_id,
-        user_id=user_id,
-        organization_id=organization_id,
-        metadata=metadata or {},
+def test_emit_deposit_authorized(mock_log_event):
+    emit_deposit_authorized(
+        session_id="S1",
+        participant_id="U1",
+        amount=30.0,
+        currency="EUR",
+        fintech_tx_id="tx123",
+        status="AUTHORIZED",
     )
 
+    mock_log_event.assert_called_once()
+    call = mock_log_event.call_args.kwargs
 
-# ---------------------------------------------------------
-# 1) Depósito autorizado en Fintech
-# ---------------------------------------------------------
+    assert call["action"] == "wallet_deposit_authorized"
+    assert call["session_id"] == "S1"
+    assert call["user_id"] == "U1"
+    assert call["metadata"]["amount"] == 30.0
 
-def emit_deposit_authorized(
-    session_id: str,
-    participant_id: str,
-    amount: float,
-    currency: str,
-    fintech_tx_id: str,
-    status: str,
-) -> None:
-    """
-    Evento: la Fintech confirma que un depósito ha sido AUTORIZADO/BLOQUEADO.
-    No significa todavía que la sesión esté adjudicada ni liquidada.
-    """
 
-    _emit_wallet_event(
-        action="wallet_deposit_authorized",
-        session_id=session_id,
-        user_id=participant_id,
-        metadata={
-            "amount": amount,
-            "currency": currency,
-            "fintech_tx_id": fintech_tx_id,
-            "status": status,
-        },
+def test_emit_settlement_executed(mock_log_event):
+    emit_settlement_executed(
+        session_id="S1",
+        adjudicatario_id="U9",
+        fintech_batch_id="batch77",
+        status="SETTLED",
     )
 
+    mock_log_event.assert_called_once()
+    call = mock_log_event.call_args.kwargs
 
-# ---------------------------------------------------------
-# 2) Liquidación completada (pago al proveedor + OÜ + DMHG)
-# ---------------------------------------------------------
+    assert call["action"] == "wallet_settlement_executed"
+    assert call["metadata"]["fintech_batch_id"] == "batch77"
 
-def emit_settlement_executed(
-    session_id: str,
-    adjudicatario_id: str,
-    fintech_batch_id: str,
-    status: str,
-) -> None:
-    """
-    Evento: la Fintech nos informa que ha ejecutado la liquidación
-    de la sesión ya adjudicada.
 
-    Incluye:
-    - Pago al proveedor del producto
-    - Transferencia de comisiones / gestión a OÜ / DMHG
-    """
-
-    _emit_wallet_event(
-        action="wallet_settlement_executed",
-        session_id=session_id,
-        user_id=adjudicatario_id,
-        metadata={
-            "fintech_batch_id": fintech_batch_id,
-            "status": status,
-        },
+def test_emit_force_majeure_refund(mock_log_event):
+    emit_force_majeure_refund(
+        session_id="S1",
+        adjudicatario_id="U9",
+        product_amount=300.0,
+        currency="EUR",
+        fintech_refund_tx_id="rf123",
+        reason="Stock irreversible",
     )
 
+    mock_log_event.assert_called_once()
+    call = mock_log_event.call_args.kwargs
 
-# ---------------------------------------------------------
-# 3) Fuerza mayor: devolución SOLO precio del producto
-# ---------------------------------------------------------
-
-def emit_force_majeure_refund(
-    session_id: str,
-    adjudicatario_id: str,
-    product_amount: float,
-    currency: str,
-    fintech_refund_tx_id: Optional[str] = None,
-    reason: Optional[str] = None,
-) -> None:
-    """
-    Evento: CASO EXCEPCIONAL (fuerza mayor)
-    - El proveedor NO puede entregar el producto.
-    - La Fintech devuelve al adjudicatario SOLO el precio del producto.
-    - NO se devuelven comisiones ni gastos de gestión.
-    """
-
-    _emit_wallet_event(
-        action="wallet_force_majeure_refund",
-        session_id=session_id,
-        user_id=adjudicatario_id,
-        metadata={
-            "product_amount": product_amount,
-            "currency": currency,
-            "fintech_refund_tx_id": fintech_refund_tx_id,
-            "reason": reason,
-        },
-    )
+    assert call["action"] == "wallet_force_majeure_refund"
+    assert call["metadata"]["product_amount"] == 300.0
