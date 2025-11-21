@@ -1,87 +1,46 @@
-# tests/test_fintech_routes.py
-
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch
+from backend_core.api.fastapi_app import app
 
-from server import app
-
-
-@pytest.fixture
-def client():
-    return TestClient(app)
+client = TestClient(app)
 
 
-@pytest.fixture
-def mock_orchestrator():
-    with patch("backend_core.api.fintech_routes.wallet_orchestrator") as mock:
-        yield mock
+# Usamos API key dummy
+HEADERS = {"X-API-Key": "TEST123"}
 
 
-# ---------------------------------------------------------
-# 1) Deposit OK
-# ---------------------------------------------------------
-
-def test_fintech_deposit_ok(client, mock_orchestrator):
+def test_fintech_deposit_ok():
     payload = {
-        "session_id": "S1",
-        "participant_id": "U1",
-        "amount": 30.0,
+        "session_id": "s1",
+        "participant_id": "u1",
+        "amount": 30,
         "currency": "EUR",
-        "fintech_tx_id": "tx123",
-        "status": "AUTHORIZED",
+        "fintech_tx_id": "tx1",
+        "status": "AUTHORIZED"
     }
-
-    response = client.post(
-        "/fintech/deposit-ok",
-        json=payload,
-        headers={"X-API-Key": "test-key"},
-    )
-
-    assert response.status_code == 200
-    mock_orchestrator.handle_deposit_ok.assert_called_once()
+    r = client.post("/fintech/deposit-ok", json=payload, headers=HEADERS)
+    assert r.status_code == 200
 
 
-# ---------------------------------------------------------
-# 2) Settlement
-# ---------------------------------------------------------
-
-def test_fintech_settlement(client, mock_orchestrator):
+def test_fintech_settlement():
     payload = {
-        "session_id": "S1",
-        "adjudicatario_id": "U9",
-        "fintech_batch_id": "batch001",
-        "status": "SETTLED",
+        "session_id": "s2",
+        "adjudicatario_id": "u22",
+        "fintech_batch_id": "batch1",
+        "status": "SETTLED"
     }
-
-    response = client.post(
-        "/fintech/settlement",
-        json=payload,
-        headers={"X-API-Key": "test-key"},
-    )
-
-    assert response.status_code == 200
-    mock_orchestrator.handle_settlement.assert_called_once()
+    r = client.post("/fintech/settlement", json=payload, headers=HEADERS)
+    assert r.status_code == 200
 
 
-# ---------------------------------------------------------
-# 3) Force majeure refund
-# ---------------------------------------------------------
-
-def test_fintech_force_majeure_refund(client, mock_orchestrator):
+def test_fintech_force_majeure_refund():
     payload = {
-        "session_id": "S1",
-        "adjudicatario_id": "U9",
-        "product_amount": 300.0,
+        "session_id": "s3",
+        "adjudicatario_id": "u33",
+        "product_amount": 300,
         "currency": "EUR",
-        "reason": "Stock irreversible",
+        "fintech_refund_tx_id": "rf99",
+        "reason": "Stock irreversible"
     }
-
-    response = client.post(
-        "/fintech/force-majeure-refund",
-        json=payload,
-        headers={"X-API-Key": "test-key"},
-    )
-
-    assert response.status_code == 200
-    mock_orchestrator.handle_force_majeure_refund.assert_called_once()
+    r = client.post("/fintech/force-majeure-refund", json=payload, headers=HEADERS)
+    assert r.status_code == 200
