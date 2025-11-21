@@ -1,0 +1,214 @@
+{
+  "info": {
+    "name": "Compra Abierta – Fintech API",
+    "_postman_id": "b3edc4c6-9f41-4f6b-9c2c-123456789abc",
+    "description": "Colección de endpoints Fintech / Smart Contract para Compra Abierta.\n\nIncluye notificaciones de depósitos, adjudicación y pagos al proveedor.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "FINTECH – Notificación depósito OK",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          },
+          {
+            "key": "X-API-Key",
+            "value": "{{api_key}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"session_id\": \"{{session_id}}\",\n  \"participant_id\": \"{{participant_id}}\",\n  \"wallet_tx_id\": \"mango_tx_123456\",\n  \"amount\": 45.64,\n  \"currency\": \"EUR\",\n  \"status\": \"SUCCEEDED\",\n  \"paid_at\": \"2025-01-01T10:15:00Z\",\n  \"raw_payload\": {\n    \"provider\": \"mangopay\",\n    \"event_type\": \"PAYIN_NORMAL_SUCCEEDED\"\n  }\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/fintech/deposits/webhook",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "fintech",
+            "deposits",
+            "webhook"
+          ]
+        },
+        "description": "Endpoint que la Fintech llama cuando un depósito del participante entra correctamente en custodia.\n\nEste endpoint debe:\n- Marcar el depósito como OK\n- Verificar si todos los participantes de la sesión tienen depósito confirmado\n- Si el aforo está completo y todos los depósitos OK, permitir la operativa determinista y posterior pago al proveedor."
+      },
+      "response": []
+    },
+    {
+      "name": "FINTECH – Notificación depósito FALLIDO",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          },
+          {
+            "key": "X-API-Key",
+            "value": "{{api_key}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"session_id\": \"{{session_id}}\",\n  \"participant_id\": \"{{participant_id}}\",\n  \"wallet_tx_id\": \"mango_tx_fail_999\",\n  \"amount\": 45.64,\n  \"currency\": \"EUR\",\n  \"status\": \"FAILED\",\n  \"failed_at\": \"2025-01-01T10:16:00Z\",\n  \"error_code\": \"CARD_DECLINED\",\n  \"raw_payload\": {\n    \"provider\": \"mangopay\",\n    \"event_type\": \"PAYIN_NORMAL_FAILED\"\n  }\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/fintech/deposits/webhook",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "fintech",
+            "deposits",
+            "webhook"
+          ]
+        },
+        "description": "Mismo endpoint que el depósito OK, pero con `status = FAILED`.\n\nTu backend debe:\n- Marcar ese depósito como fallido\n- NO permitir que la sesión se considere válida aunque el número de participantes esté completo\n- Eventualmente expirar o reabrir hueco según la lógica de negocio que definamos."
+      },
+      "response": []
+    },
+    {
+      "name": "OÜ → Motor – Confirmar sesión totalmente pagada",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          },
+          {
+            "key": "X-API-Key",
+            "value": "{{api_key}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"session_id\": \"{{session_id}}\",\n  \"all_deposits_ok\": true,\n  \"notified_by\": \"fintech\",\n  \"notified_at\": \"2025-01-01T10:17:00Z\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/fintech/sessions/{{session_id}}/all_deposits_ok",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "fintech",
+            "sessions",
+            "{{session_id}}",
+            "all_deposits_ok"
+          ]
+        },
+        "description": "Endpoint interno para que, una vez que la Fintech asegure que TODOS los depósitos son válidos, se marque la sesión como **financieramente cerrada**.\n\nDesde aquí, tu motor puede:\n- Ejecutar el smart contract determinista\n- Generar el adjudicatario\n- Notificar a la Fintech que puede proceder con el pago al proveedor."
+      },
+      "response": []
+    },
+    {
+      "name": "FINTECH – Notificación pago a proveedor OK",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          },
+          {
+            "key": "X-API-Key",
+            "value": "{{api_key}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"session_id\": \"{{session_id}}\",\n  \"adjudicatario_user_id\": \"{{adjudicatario_user_id}}\",\n  \"wallet_tx_id\": \"mango_pay_supplier_777\",\n  \"amount_product\": 800.0,\n  \"amount_fees_management\": 96.8,\n  \"amount_fee_ou\": 16.0,\n  \"currency\": \"EUR\",\n  \"status\": \"SUCCEEDED\",\n  \"paid_at\": \"2025-01-01T10:30:00Z\",\n  \"raw_payload\": {\n    \"provider\": \"mangopay\",\n    \"event_type\": \"PAYOUT_NORMAL_SUCCEEDED\"\n  }\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/fintech/payouts/webhook",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "fintech",
+            "payouts",
+            "webhook"
+          ]
+        },
+        "description": "La Fintech notifica que:\n- Se ha pagado al proveedor el importe del producto\n- Se han procesado gastos de gestión y comisión\n\nTu backend puede usar este evento para:\n- Marcar la sesión como **operación liquidada**\n- Registrar evidencias y auditoría\n- Disparar notificaciones finales al adjudicatario (recogida en tienda)."
+      },
+      "response": []
+    },
+    {
+      "name": "CASO EXCEPCIONAL – Devolución precio producto al adjudicatario",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          },
+          {
+            "key": "X-API-Key",
+            "value": "{{api_key}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"session_id\": \"{{session_id}}\",\n  \"adjudicatario_user_id\": \"{{adjudicatario_user_id}}\",\n  \"reason\": \"FORCE_MAJEURE_SUPPLIER_CANNOT_DELIVER\",\n  \"amount_refund_product\": 800.0,\n  \"currency\": \"EUR\",\n  \"notified_by\": \"operadora\",\n  \"notified_at\": \"2025-01-02T09:00:00Z\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/fintech/case/force_majeure_refund",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "fintech",
+            "case",
+            "force_majeure_refund"
+          ]
+        },
+        "description": "Caso excepcional de fuerza mayor, según lo que hemos definido contractualmente:\n\n- El proveedor NO puede entregar el producto.\n- Solo se devuelve al adjudicatario la parte correspondiente al **precio del producto**.\n- No se devuelven gastos de gestión ni comisión.\n\nEste endpoint representa la instrucción de la OÜ hacia la Fintech para liberar esos fondos al adjudicatario."
+      },
+      "response": []
+    }
+  ],
+  "event": [],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "api_key",
+      "value": "TEST-API-KEY"
+    },
+    {
+      "key": "session_id",
+      "value": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "key": "participant_id",
+      "value": "00000000-0000-0000-0000-000000000001"
+    },
+    {
+      "key": "adjudicatario_user_id",
+      "value": "user-123"
+    }
+  ]
+}
