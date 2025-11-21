@@ -1,25 +1,27 @@
 """
 wallet_events.py
-Capa de eventos estructurados del Wallet para Compra Abierta.
+Capa mínima de emisión de eventos de wallet / fintech.
 
-Responsabilidad:
-- Registrar de forma consistente todos los eventos relacionados con la Fintech.
-- NO contiene lógica de negocio.
-- NO modifica sesiones ni participantes.
-- Todos los eventos van al audit_log para trazabilidad completa.
+Objetivo:
+- Registrar eventos estructurados en audit_logs.
+- Mantener trazabilidad clara entre:
+  - Depósitos autorizados
+  - Liquidaciones ejecutadas
+  - Reembolsos por fuerza mayor
 
-Eventos incluidos:
-1) Depósito autorizado
-2) Liquidación ejecutada
-3) Reembolso por fuerza mayor
+Este módulo NO ejecuta lógica contractual.
+Solamente registra eventos.
 """
 
-from backend_core.services.audit_repository import log_event
+from datetime import datetime
+from typing import Optional, Dict, Any
+
+from .audit_repository import log_event
 
 
-# -----------------------------------------------------
-# 1) DEPÓSITO AUTORIZADO
-# -----------------------------------------------------
+# ---------------------------------------------------------
+# 1) Depósito autorizado / bloqueado en la Fintech
+# ---------------------------------------------------------
 def emit_deposit_authorized(
     session_id: str,
     participant_id: str,
@@ -29,8 +31,9 @@ def emit_deposit_authorized(
     status: str,
 ) -> None:
     """
-    Evento emitido cuando la Fintech autoriza y bloquea un depósito.
+    Emite el evento cuando un depósito ha sido autorizado por la Fintech.
     """
+
     log_event(
         action="wallet_deposit_authorized",
         session_id=session_id,
@@ -40,13 +43,14 @@ def emit_deposit_authorized(
             "currency": currency,
             "fintech_tx_id": fintech_tx_id,
             "status": status,
+            "event_at": datetime.utcnow().isoformat(),
         }
     )
 
 
-# -----------------------------------------------------
-# 2) LIQUIDACIÓN EJECUTADA (Proveedor + OÜ + DMHG)
-# -----------------------------------------------------
+# ---------------------------------------------------------
+# 2) Liquidación ejecutada por la Fintech
+# ---------------------------------------------------------
 def emit_settlement_executed(
     session_id: str,
     adjudicatario_id: str,
@@ -54,11 +58,10 @@ def emit_settlement_executed(
     status: str,
 ) -> None:
     """
-    Evento emitido cuando la Fintech liquida:
-    - Pago a proveedor
-    - Comisión para la OÜ
-    - Gastos de gestión para DMHG (España)
+    Emite el evento cuando la Fintech ejecuta el pago al proveedor
+    y se distribuyen comisiones/gastos según proceda.
     """
+
     log_event(
         action="wallet_settlement_executed",
         session_id=session_id,
@@ -66,26 +69,27 @@ def emit_settlement_executed(
         metadata={
             "fintech_batch_id": fintech_batch_id,
             "status": status,
+            "event_at": datetime.utcnow().isoformat(),
         }
     )
 
 
-# -----------------------------------------------------
-# 3) REEMBOLSO POR FUERZA MAYOR
-# -----------------------------------------------------
+# ---------------------------------------------------------
+# 3) Devolución por fuerza mayor (solo precio del producto)
+# ---------------------------------------------------------
 def emit_force_majeure_refund(
     session_id: str,
     adjudicatario_id: str,
     product_amount: float,
     currency: str,
-    fintech_refund_tx_id: str | None,
-    reason: str | None,
+    fintech_refund_tx_id: Optional[str],
+    reason: Optional[str],
 ) -> None:
     """
-    Evento emitido cuando el proveedor NO puede entregar el producto.
-    - Solo se devuelve el precio del producto al adjudicatario.
-    - NO se devuelve comisión ni gastos de gestión.
+    Evento para reflejar la devolución extraordinaria al adjudicatario
+    cuando el proveedor NO puede entregar el producto por fuerza mayor.
     """
+
     log_event(
         action="wallet_force_majeure_refund",
         session_id=session_id,
@@ -95,5 +99,6 @@ def emit_force_majeure_refund(
             "currency": currency,
             "fintech_refund_tx_id": fintech_refund_tx_id,
             "reason": reason,
+            "event_at": datetime.utcnow().isoformat(),
         }
     )
