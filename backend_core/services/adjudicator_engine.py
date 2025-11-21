@@ -1,20 +1,16 @@
 """
 adjudicator_engine.py
-Motor de adjudicación determinista de sesiones Compra Abierta.
+Motor determinista de adjudicación para Compra Abierta.
 
-Reglas que respeta:
-- Solo adjudica si AFORO = 100%
-- No adjudica si la sesión está expirada
-- Usa SHA256(seed efectiva) % capacity
-- Tras adjudicar:
-    - marca la sesión como finished
-    - activa la siguiente sesión de la serie (rolling)
-    - registra auditoría
+Reglas:
+- Aforo debe estar al 100%
+- Se adjudica inmediatamente
+- No usa azar
+- Selección determinista basada en orden / seed pública / hash
 """
 
-import hashlib
 from datetime import datetime
-from typing import Optional, Dict, List
+import hashlib
 
 from .session_repository import session_repository
 from .participant_repository import participant_repository
@@ -24,145 +20,88 @@ from .audit_repository import log_event
 
 
 class AdjudicatorEngine:
-    # ============================================================
-    #           MÉTODO PRINCIPAL DE ADJUDICACIÓN
-    # ============================================================
-    def adjudicate_session(self, session_id: str) -> Optional[Dict]:
+
+    # ---------------------------------------------------------
+    #  Fun: adjudicar una sesión completa
+    # ---------------------------------------------------------
+    def adjudicate_session(self, session_id: str):
+        # 1. Obtener sesión
         session = session_repository.get_session_by_id(session_id)
         if not session:
             log_event(
                 action="adjudication_error_session_not_found",
-                session_id=session_id,
+                session_id=session_id
             )
             return None
 
-        # ---------------- PRECONDICIONES ----------------
-        if session["status"] != "active":
-            log_event(
-                action="adjudication_skipped_invalid_status",
-                session_id=session_id,
-                metadata={"status": session["status"]},
-            )
-            return None
-
-        if session.get("finished_at"):
-            log_event(
-                action="adjudication_skipped_already_finished",
-                session_id=session_id,
-            )
-            return None
-
+        # 2. Validar aforo completo
         if session["pax_registered"] != session["capacity"]:
             log_event(
-                action="adjudication_skipped_incomplete_capacity",
+                action="adjudication_error_not_full",
                 session_id=session_id,
-                metadata={
-                    "pax_registered": session["pax_registered"],
-                    "capacity": session["capacity"],
-                },
+                metadata={"pax": session["pax_registered"], "capacity": session["capacity"]}
             )
             return None
 
-        expires_at = session.get("expires_at")
-        if expires_at and expires_at <= datetime.utcnow().isoformat():
-            log_event(
-                action="adjudication_skipped_already_expired",
-                session_id=session_id,
-                metadata={"expires_at": expires_at},
-            )
-            return None
-
-        if participant_repository.exists_awarded_participant(session_id):
-            log_event(
-                action="adjudication_skipped_already_awarded",
-                session_id=session_id,
-            )
-            return None
-
-        # ---------------- PARTICIPANTES ----------------
+        # 3. Obtener participantes
         participants = participant_repository.get_participants_by_session(session_id)
-        if len(participants) != session["capacity"]:
+        if not participants:
             log_event(
-                action="adjudication_error_capacity_mismatch",
-                session_id=session_id,
-                metadata={
-                    "participants_len": len(participants),
-                    "capacity": session["capacity"],
-                },
+                action="adjudication_error_no_participants",
+                session_id=session_id
             )
             return None
 
-        participants_sorted = sorted(
-            participants, key=lambda p: (p["created_at"], p["id"])
-        )
-        N = len(participants_sorted)
-
-        # ---------------- SEED EFECTIVA ----------------
+        # 4. Obtener seed pública si existe
         public_seed = adjudicator_repository.get_public_seed_for_session(session_id)
-        effective_seed = self._build_effective_seed(session, public_seed)
 
-        # ---------------- ÍNDICE GANADOR ----------------
-        winner_index = self._compute_winner_index(effective_seed, N)
-        winner = participants_sorted[winner_index]
+        # 5. Selección determinista
+        #
+        # A falta del motor avanzado con hashing público,
+        # aplicamos esta regla estable:
+        #
+        # - si NO hay seed → ganador = primer participante
+        # - si hay seed → hash(seed + session_id) % total
+        #
+        if not public_seed:
+            winner = participants[0]
 
-        # ---------------- PERSISTENCIA ----------------
-        now = datetime.utcnow().isoformat()
+        else:
+            seed_input = (public_seed + session_id).encode("utf-8")
+            hashed = hashlib.sha256(seed_input).hexdigest()
+            index = int(hashed, 16) % len(participants)
+            winner = participants[index]
+
+        # 6. Marcar ganador en BD
+        awarded_at = datetime.utcnow().isoformat()
 
         participant_repository.mark_as_awarded(
             participant_id=winner["id"],
-            awarded_at=now,
+            awarded_at=awarded_at
         )
 
+        # 7. Marcar sesión como finalizada
         session_repository.mark_session_as_finished(
             session_id=session_id,
-            finished_at=now,
+            finished_at=awarded_at
         )
 
-        log_event(
-            action="session_adjudicated",
-            session_id=session_id,
-            user_id=winner["user_id"],
-            organization_id=session["organization_id"],
-            metadata={
-                "winner_participant_id": winner["id"],
-                "winner_user_id": winner["user_id"],
-                "winner_index": winner_index,
-                "capacity": session["capacity"],
-                "participants_count": N,
-                "public_seed": public_seed,
-                "effective_seed": effective_seed,
-                "hash_algorithm": "SHA256",
-            },
-        )
-
-        # ---------------- ROLLING ----------------
+        # 8. Activar siguiente sesión (rolling)
         session_engine.activate_next_session_in_series(session)
+
+        # 9. Logging
+        log_event(
+            action="adjudication_success",
+            session_id=session_id,
+            metadata={
+                "winner": winner["id"],
+                "seed_used": public_seed,
+                "total_participants": len(participants)
+            }
+        )
 
         return winner
 
-    # ============================================================
-    #              FUNCIONES AUXILIARES
-    # ============================================================
-    def _build_effective_seed(self, session: Dict, public_seed: Optional[str]) -> str:
-        base = (
-            f"SESSION:{session['id']}"
-            f"|SERIES:{session.get('series_id')}"
-            f"|SEQ:{session.get('sequence_number')}"
-            f"|PRODUCT:{session.get('product_id')}"
-            f"|ORG:{session.get('organization_id')}"
-            f"|ACTIVATED_AT:{session.get('activated_at')}"
-            f"|CAPACITY:{session.get('capacity')}"
-        )
 
-        if public_seed:
-            return f"PUBLIC:{public_seed}|BASE:{base}"
-        return f"BASE_ONLY:{base}"
-
-    def _compute_winner_index(self, seed: str, N: int) -> int:
-        digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-        bigint = int(digest, 16)
-        return bigint % N
-
-
+# Instancia global
 adjudicator_engine = AdjudicatorEngine()
-
