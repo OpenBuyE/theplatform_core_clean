@@ -1,50 +1,67 @@
 """
-fintech_routes.py — versión conectada
--------------------------------------
+fintech_routes.py
+Endpoints REST relacionados con la Fintech / pasarela de pago.
 
-Ahora estos endpoints:
-- Registran auditoría
-- Y activan directamente wallet_events → wallet_orchestrator
-  → contract_engine
+Objetivo (versión 1, segura y mínima):
+- Recibir notificaciones de la Fintech (webhooks simulados).
+- Delegar la lógica a wallet_orchestrator.
+- Registrar todo en audit_logs vía wallet_events.
+
+Más adelante:
+- wallet_orchestrator hablará con contract_engine para cerrar
+  el ciclo completo (depósito OK, liquidación, fuerza mayor, etc.).
 """
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from typing import Optional
 
-from backend_core.services.audit_repository import log_event
-from backend_core.services.wallet_events import wallet_events
 from .deps import api_key_required
+from backend_core.services.wallet_orchestrator import wallet_orchestrator
 
 
 router = APIRouter(
     prefix="/fintech",
     tags=["fintech"],
-    dependencies=[Depends(api_key_required)]
+    dependencies=[Depends(api_key_required)],
 )
 
 
-# =========================================================
-# MODELOS Pydantic
-# =========================================================
+# ---------------------------------------------------------
+# Modelos de entrada (payloads Fintech / internos)
+# ---------------------------------------------------------
 
 class DepositNotification(BaseModel):
+    """
+    Notificación de que un depósito (pago del participante)
+    ha sido AUTORIZADO y bloqueado en la Fintech.
+    """
     session_id: str
     participant_id: str
     amount: float
     currency: str = "EUR"
     fintech_tx_id: str
-    status: str
+    status: str  # ejemplo: "AUTHORIZED", "FAILED", ...
 
 
 class SettlementNotification(BaseModel):
+    """
+    Notificación de que la Fintech ha ejecutado la liquidación:
+    - Pago al proveedor
+    - Comisiones / gastos de gestión
+    """
     session_id: str
     adjudicatario_id: str
     fintech_batch_id: str
-    status: str
+    status: str  # ejemplo: "SETTLED", "FAILED", ...
 
 
 class ForceMajeureRefund(BaseModel):
+    """
+    Notificación/cmd de caso de fuerza mayor:
+    - No se puede entregar el producto.
+    - Se devuelve al adjudicatario SOLO el precio del producto.
+    """
     session_id: str
     adjudicatario_id: str
     product_amount: float
@@ -53,74 +70,55 @@ class ForceMajeureRefund(BaseModel):
     reason: Optional[str] = None
 
 
-# =========================================================
-# 1) Depósito OK
-# =========================================================
+# ---------------------------------------------------------
+# 1) Notificación de depósito OK (webhook Fintech)
+# ---------------------------------------------------------
+
 @router.post("/deposit-ok")
 def fintech_deposit_ok(payload: DepositNotification):
+    """
+    Endpoint llamado por la Fintech (o por nuestro backend intermedio)
+    cuando un depósito de un participante ha sido AUTORIZADO.
 
-    log_event(
-        action="fintech_deposit_ok",
-        session_id=payload.session_id,
-        user_id=payload.participant_id,
-        metadata=payload.dict()
-    )
+    Flujo:
+    - Validación básica por FastAPI (pydantic).
+    - Delegación a wallet_orchestrator.handle_deposit_ok().
+    - Registro en audit_logs vía wallet_events.
+    """
 
-    wallet_events.on_deposit_ok(
-        session_id=payload.session_id,
-        participant_id=payload.participant_id,
-        amount=payload.amount,
-        currency=payload.currency,
-        fintech_tx_id=payload.fintech_tx_id,
-        status=payload.status
-    )
-
-    return {"status": "ok"}
+    wallet_orchestrator.handle_deposit_ok(payload.dict())
+    return {"status": "ok", "message": "Deposit notification processed"}
 
 
-# =========================================================
-# 2) Liquidación completada
-# =========================================================
+# ---------------------------------------------------------
+# 2) Notificación de liquidación (pago al proveedor + OÜ + DMHG)
+# ---------------------------------------------------------
+
 @router.post("/settlement")
 def fintech_settlement(payload: SettlementNotification):
+    """
+    Endpoint llamado cuando la Fintech ha ejecutado la liquidación
+    de una sesión ya adjudicada.
+    """
 
-    log_event(
-        action="fintech_settlement",
-        session_id=payload.session_id,
-        user_id=payload.adjudicatario_id,
-        metadata=payload.dict()
-    )
-
-    wallet_events.on_settlement_completed(
-        session_id=payload.session_id,
-        adjudicatario_id=payload.adjudicatario_id,
-        fintech_batch_id=payload.fintech_batch_id,
-        status=payload.status
-    )
-
-    return {"status": "ok"}
+    wallet_orchestrator.handle_settlement(payload.dict())
+    return {"status": "ok", "message": "Settlement notification processed"}
 
 
-# =========================================================
-# 3) Fuerza mayor (devolución del producto)
-# =========================================================
+# ---------------------------------------------------------
+# 3) Caso de fuerza mayor (devolución precio del producto)
+# ---------------------------------------------------------
+
 @router.post("/force-majeure-refund")
 def fintech_force_majeure_refund(payload: ForceMajeureRefund):
+    """
+    Endpoint para gestionar el caso excepcional:
+    - El proveedor NO puede entregar el producto.
+    - La Fintech devuelve al adjudicatario SOLO el precio del producto.
 
-    log_event(
-        action="fintech_force_majeure_refund",
-        session_id=payload.session_id,
-        user_id=payload.adjudicatario_id,
-        metadata=payload.dict()
-    )
+    Importante:
+    - NO se devuelven comisiones ni gastos de gestión.
+    """
 
-    wallet_events.on_force_majeure_refund(
-        session_id=payload.session_id,
-        adjudicatario_id=payload.adjudicatario_id,
-        product_amount=payload.product_amount,
-        currency=payload.currency,
-        fintech_refund_tx_id=payload.fintech_refund_tx_id,
-        reason=payload.reason
-    )
-
-    return {"status": "ok"}
+    wallet_orchestrator.handle_force_majeure_refund(payload.dict())
+    return {"status": "ok", "message": "Force majeure refund processed"}
