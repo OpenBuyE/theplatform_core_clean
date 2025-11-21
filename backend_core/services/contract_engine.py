@@ -1,181 +1,159 @@
 """
 contract_engine.py
-Motor contractual de Compra Abierta.
+Motor contractual para Compra Abierta.
 
-Responsabilidades:
-- Verificar que todos los depósitos de la sesión están autorizados.
-- Activar adjudicación determinista cuando:
-    * sesión tiene aforo completo
-    * todos los depósitos están "AUTHORIZED"
-- Integrarse con wallet_orchestrator / fintech en pasos posteriores
-- Gestionar settlement y casos de fuerza mayor
+RESPONSABILIDADES:
+- Registrar el resultado contractual de una sesión adjudicada
+- Informar al wallet/orchestrator de los pasos financieros
+- Registrar fuerza mayor
+- Mantener trazabilidad y consistencia interna
 
-Este módulo NO tiene imports circulares.
+IMPORTANTE:
+- Este archivo **NO importa adjudicator_engine**
+  para evitar ciclos circulares.
+- adjudicator_engine llamará a: contract_engine.on_session_awarded(...)
 """
 
-from typing import List, Dict, Optional
 from datetime import datetime
+from typing import Dict, List, Optional, Any
 
+from .audit_repository import log_event
 from .session_repository import session_repository
 from .participant_repository import participant_repository
-from .adjudicator_engine import adjudicator_engine
-from .audit_repository import log_event
+
+# Enlazaremos wallet_orchestrator SOLO DENTRO DE LOS MÉTODOS
+# Para evitar ciclos en tiempo de carga
+# from .wallet_orchestrator import wallet_orchestrator
 
 
 class ContractEngine:
     """
-    Motor contractual general del sistema.
+    Motor contractual del proyecto.
+    Este componente registra eventos legales-operativos
+    que forman parte del Smart Contract determinista.
     """
 
-    # -----------------------------------------------------
-    # 1) Verificar si una sesión está lista para adjudicar
-    # -----------------------------------------------------
-    def _are_all_deposits_authorized(
+    # ------------------------------------------------------------------
+    # 1) Registro de adjudicación contractual (llamado por adjudicator_engine)
+    # ------------------------------------------------------------------
+    def on_session_awarded(
         self,
-        session_id: str,
-        participants: List[Dict]
-    ) -> bool:
+        session: Dict,
+        participants: List[Dict],
+        awarded_participant: Dict,
+    ) -> None:
         """
-        Comprueba si TODOS los participantes de la sesión
-        tienen depósitos autorizados (wallet + fintech).
-
-        Esta versión inicial se basa en:
-        - Los eventos de wallet (deposit authorized)
-        - El campo participant["deposit_status"] (si existe)
-        - Metadata del auditor (futuro)
-
-        De momento asumimos que:
-        - participant["amount"] es válido
-        - participant["deposit_status"] == "AUTHORIZED"
+        Método invocado cuando una sesión queda adjudicada
+        por el motor determinista.
         """
 
-        for p in participants:
-            status = p.get("deposit_status")
-            if status != "AUTHORIZED":
-                return False
+        session_id = session["id"]
+        adjudicatario_id = awarded_participant["id"]
+        user_id = awarded_participant["user_id"]
+        now_iso = datetime.utcnow().isoformat()
 
-        return True
-
-    # -----------------------------------------------------
-    # 2) Motor principal que chequea si se debe adjudicar
-    # -----------------------------------------------------
-    def try_adjudicate_session(self, session_id: str) -> Optional[Dict]:
-        """
-        Lógica principal del motor contractual.
-
-        Flujo:
-        - Cargar sesión
-        - Si no está 'active' o no tiene aforo completo → no adjudica
-        - Obtener lista de participantes
-        - Verificar que TODOS los depósitos están OK
-        - Llamar adjudicator_engine para seleccionar adjudicatario
-        """
-
-        session = session_repository.get_session_by_id(session_id)
-        if not session:
-            log_event("contract_error_session_not_found", session_id=session_id)
-            return None
-
-        # 1. La sesión debe estar activa
-        if session["status"] != "active":
-            log_event("contract_session_not_active", session_id=session_id)
-            return None
-
-        # 2. Debe tener aforo completo
-        capacity = session.get("capacity")
-        registered = session.get("pax_registered")
-
-        if registered != capacity:
-            log_event(
-                "contract_not_full_capacity",
-                session_id=session_id,
-                metadata={"registered": registered, "capacity": capacity}
-            )
-            return None
-
-        # 3. Obtener todos los participantes
-        participants = participant_repository.get_participants_by_session(session_id)
-        if not participants:
-            log_event("contract_no_participants", session_id=session_id)
-            return None
-
-        # 4. Verificar depósitos autorizados
-        if not self._are_all_deposits_authorized(session_id, participants):
-            log_event(
-                "contract_deposits_not_authorized",
-                session_id=session_id,
-                metadata={"participants": len(participants)}
-            )
-            return None
-
-        # 5. Ejecutar adjudicación determinista
-        adjudicatario = adjudicator_engine.adjudicate_session(session_id)
-
-        if not adjudicatario:
-            log_event("contract_adjudication_failed", session_id=session_id)
-            return None
-
-        # 6. Marcar sesión como finalizada
-        now = datetime.utcnow().isoformat()
-        session_repository.mark_session_as_finished(session_id, now)
-
+        # 1. Registrar evento contractual
         log_event(
-            "contract_adjudication_completed",
+            action="contract_session_awarded",
             session_id=session_id,
-            metadata={"awarded_user_id": adjudicatario["user_id"]}
+            user_id=user_id,
+            metadata={
+                "adjudicatario_participant_id": adjudicatario_id,
+                "participants_count": len(participants),
+            }
         )
 
-        return adjudicatario
+        # 2. Notificar al wallet_orchestrator (import diferido)
+        try:
+            from .wallet_orchestrator import wallet_orchestrator
 
-    # -----------------------------------------------------
-    # 3) Liquidación final tras adjudicación
-    # -----------------------------------------------------
+            wallet_orchestrator.on_session_awarded(
+                session=session,
+                participants=participants,
+                awarded_participant=awarded_participant,
+            )
+        except Exception as e:
+            log_event(
+                action="contract_engine_wallet_notify_error",
+                session_id=session_id,
+                metadata={"error": str(e)}
+            )
+
+    # ------------------------------------------------------------------
+    # 2) Registro de liquidación económica completada por Fintech
+    # ------------------------------------------------------------------
     def on_settlement_completed(
         self,
         session_id: str,
         adjudicatario_id: str,
-        fintech_batch_id: str,
-    ):
-        """
-        Se llama cuando la Fintech confirma liquidación:
-        - Pago al proveedor
-        - Pago comisiones
-        - Pago gastos de gestión
-        """
+        fintech_batch_id: str
+    ) -> None:
 
         log_event(
-            "contract_settlement_completed",
+            action="contract_settlement_completed",
             session_id=session_id,
             user_id=adjudicatario_id,
             metadata={"fintech_batch_id": fintech_batch_id}
         )
 
-    # -----------------------------------------------------
-    # 4) Caso de fuerza mayor (solo se devuelve el precio)
-    # -----------------------------------------------------
+    # ------------------------------------------------------------------
+    # 3) Caso excepcional de fuerza mayor
+    # ------------------------------------------------------------------
     def on_force_majeure_refund(
         self,
         session_id: str,
         adjudicatario_id: str,
         product_amount: float,
         currency: str,
-        reason: Optional[str]
-    ):
-        """
-        El proveedor NO puede entregar el producto.
-        La Fintech devuelve al adjudicatario:
-        - Solo precio del producto
-        """
+        reason: Optional[str] = None,
+        fintech_refund_tx_id: Optional[str] = None
+    ) -> None:
 
         log_event(
-            "contract_force_majeure",
+            action="contract_force_majeure",
             session_id=session_id,
             user_id=adjudicatario_id,
             metadata={
                 "product_amount": product_amount,
                 "currency": currency,
                 "reason": reason,
+                "fintech_refund_tx_id": fintech_refund_tx_id
             }
+        )
+
+    # ------------------------------------------------------------------
+    # 4) Utilidad: verificación interna (opcional, se ampliará)
+    # ------------------------------------------------------------------
+    def verify_all_deposits_ok(self, session_id: str) -> bool:
+        """
+        Verifica si TODOS los participantes han sido notificados como 'deposit_ok'.
+        En versiones futuras se consultará wallet state.
+        """
+        # INTEGRACIÓN REAL → cuando wallet tenga un storage
+        log_event(
+            action="contract_verify_all_deposits_pending",
+            session_id=session_id
+        )
+        return True  # placeholder actual
+
+    # ------------------------------------------------------------------
+    # 5) Integración manual (opcional de testing)
+    # ------------------------------------------------------------------
+    def simulate_manual_trigger(self, session_id: str) -> None:
+        """
+        Invocado manualmente para test.
+        """
+        session = session_repository.get_session_by_id(session_id)
+        if not session:
+            return
+
+        participants = participant_repository.get_participants_by_session(session_id)
+        awarded = participant_repository.get_awarded_participant(session_id)
+
+        self.on_session_awarded(
+            session=session,
+            participants=participants,
+            awarded_participant=awarded
         )
 
 
