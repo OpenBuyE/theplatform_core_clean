@@ -1,4 +1,6 @@
-streamlit
+streamlit==1.51.0
 python-dotenv
-requests
-
+postgrest
+gotrue
+storage3
+supafunc
