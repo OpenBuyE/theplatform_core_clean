@@ -1,14 +1,23 @@
 """
 session_repository.py
-Repositorio de sesiones para Compra Abierta.
+Repositorio de sesiones para Compra Abierta (versión ca_sessions).
 
-Responsabilidades:
-- Obtener sesiones por estado, serie, organización
-- Obtener una sesión por id
-- Marcar sesiones como finished (con o sin adjudicación)
-- Incrementar pax_registered
-- Listar sesiones activas y expiradas
-- Activar sesiones (parked -> active)
+Tabla base:
+- public.ca_sessions
+
+Campos principales (según Supabase):
+- id              uuid PK
+- product_id      text
+- organization_id uuid
+- series_id       uuid
+- sequence_number int
+- status          text ('parked' | 'active' | 'finished' ...)
+- capacity        int
+- pax_registered  int
+- activated_at    timestamptz
+- expires_at      timestamptz
+- finished_at     timestamptz
+- created_at      timestamptz
 """
 
 from datetime import datetime, timedelta
@@ -18,11 +27,10 @@ from .supabase_client import supabase
 from .audit_repository import log_event
 
 
-SESSION_TABLE = "sessions"
+SESSION_TABLE = "ca_sessions"
 
 
 class SessionRepository:
-
     # ---------------------------------------------------------
     #  Obtener una sesión por ID
     # ---------------------------------------------------------
@@ -45,7 +53,7 @@ class SessionRepository:
         status: Optional[str] = None,
         organization_id: Optional[str] = None,
         series_id: Optional[str] = None,
-        limit: int = 200
+        limit: int = 200,
     ) -> List[Dict]:
         query = supabase.table(SESSION_TABLE).select("*")
 
@@ -56,7 +64,6 @@ class SessionRepository:
         if series_id:
             query = query.eq("series_id", series_id)
 
-        # Orden por creación, las más recientes primero
         query = query.order("created_at", desc=True).limit(limit)
 
         response = query.execute()
@@ -69,7 +76,7 @@ class SessionRepository:
         self,
         organization_id: Optional[str] = None,
         series_id: Optional[str] = None,
-        limit: int = 200
+        limit: int = 200,
     ) -> List[Dict]:
         return self.get_sessions(
             status="parked",
@@ -84,11 +91,11 @@ class SessionRepository:
     def activate_session(
         self,
         session_id: str,
-        expires_at: Optional[str] = None
+        expires_at: Optional[str] = None,
     ) -> Optional[Dict]:
         """
         Activa una sesión parked.
-        Si no se pasa expires_at, se asume ventana de 5 días desde ahora (lado backend).
+        Si no se pasa expires_at, se asume ventana de 5 días desde ahora.
         """
         now = datetime.utcnow()
         if expires_at is None:
@@ -112,7 +119,7 @@ class SessionRepository:
         log_event(
             action="session_activated",
             session_id=session_id,
-            metadata={"expires_at": expires_at}
+            metadata={"expires_at": expires_at},
         )
 
         return data
@@ -126,7 +133,7 @@ class SessionRepository:
             .table(SESSION_TABLE)
             .update({
                 "status": "finished",
-                "finished_at": finished_at
+                "finished_at": finished_at,
             })
             .eq("id", session_id)
             .execute()
@@ -135,7 +142,7 @@ class SessionRepository:
         log_event(
             action="session_marked_finished",
             session_id=session_id,
-            metadata={"finished_at": finished_at}
+            metadata={"finished_at": finished_at},
         )
 
     # ---------------------------------------------------------
@@ -147,7 +154,7 @@ class SessionRepository:
             .table(SESSION_TABLE)
             .update({
                 "status": "finished",
-                "finished_at": finished_at
+                "finished_at": finished_at,
             })
             .eq("id", session_id)
             .execute()
@@ -156,29 +163,18 @@ class SessionRepository:
         log_event(
             action="session_marked_finished_without_award",
             session_id=session_id,
-            metadata={"finished_at": finished_at}
+            metadata={"finished_at": finished_at},
         )
 
     # ---------------------------------------------------------
     #  Incrementar pax_registered (cuando entra un participante)
     # ---------------------------------------------------------
     def increment_pax_registered(self, session_id: str) -> None:
-        """
-        Incrementa pax_registered de la sesión en 1.
-
-        Nota: este método hace:
-        - lee la sesión
-        - suma 1
-        - guarda el valor
-
-        En entornos de alta concurrencia lo ideal sería una función SQL atómica,
-        pero para el estado actual del proyecto es suficiente.
-        """
         session = self.get_session_by_id(session_id)
         if not session:
             log_event(
                 action="increment_pax_error_session_not_found",
-                session_id=session_id
+                session_id=session_id,
             )
             return
 
@@ -196,21 +192,13 @@ class SessionRepository:
         log_event(
             action="pax_registered_incremented",
             session_id=session_id,
-            metadata={
-                "previous": current,
-                "new": new_value
-            }
+            metadata={"previous": current, "new": new_value},
         )
 
     # ---------------------------------------------------------
-    #  Obtener sesiones activas ya expiradas (para motor de expiración)
+    #  Sesiones activas ya expiradas (para motor de expiración)
     # ---------------------------------------------------------
     def get_active_sessions_expired(self, now_iso: str) -> List[Dict]:
-        """
-        Devuelve sesiones con:
-        - status = 'active'
-        - expires_at < now_iso
-        """
         response = (
             supabase
             .table(SESSION_TABLE)
@@ -219,18 +207,12 @@ class SessionRepository:
             .lt("expires_at", now_iso)
             .execute()
         )
-
         return response.data or []
 
     # ---------------------------------------------------------
-    #  Buscar siguiente sesión de la serie (para rolling)
+    #  Buscar siguiente sesión de la serie (rolling)
     # ---------------------------------------------------------
     def get_next_session_in_series(self, session: Dict) -> Optional[Dict]:
-        """
-        Dada una sesión, busca la siguiente de la misma serie
-        con sequence_number mayor y status = 'parked',
-        escogiendo la de menor sequence_number posible.
-        """
         series_id = session.get("series_id")
         sequence_number = session.get("sequence_number")
 
@@ -244,7 +226,7 @@ class SessionRepository:
             .eq("series_id", series_id)
             .eq("status", "parked")
             .gt("sequence_number", sequence_number)
-            .order("sequence_number", desc=False)  # siguiente por orden ascendente
+            .order("sequence_number")  # asc por defecto
             .limit(1)
             .execute()
         )
@@ -256,6 +238,6 @@ class SessionRepository:
         return data[0]
 
 
-# Instancia global exportable
+# Instancia global
 session_repository = SessionRepository()
 
