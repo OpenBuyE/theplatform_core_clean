@@ -1,12 +1,7 @@
 """
 participant_repository.py
-Gestión de participantes de sesiones Compra Abierta.
-
-Responsabilidades:
-- Insertar participantes en la sesión
-- Verificar si ya existe un adjudicatario en la sesión
-- Obtener lista de participantes
-- Disparar adjudicación cuando se completa aforo
+Gestión de participantes para sesiones Compra Abierta.
+Adaptado a tablas nuevas: ca_session_participants
 """
 
 from datetime import datetime
@@ -15,8 +10,6 @@ from typing import List, Dict, Optional
 from .supabase_client import supabase
 from .audit_repository import log_event
 from .session_repository import session_repository
-from .adjudicator_engine import adjudicator_engine
-
 
 PARTICIPANT_TABLE = "ca_session_participants"
 
@@ -24,19 +17,16 @@ PARTICIPANT_TABLE = "ca_session_participants"
 class ParticipantRepository:
 
     # ---------------------------------------------------------
-    #  Obtener participantes de una sesión
+    #  Obtener participantes por sesión
     # ---------------------------------------------------------
     def get_participants_by_session(self, session_id: str) -> List[Dict]:
-        """Devuelve participantes ordenados por fecha ASC."""
         response = (
-            supabase
-            .table(PARTICIPANT_TABLE)
+            supabase.table(PARTICIPANT_TABLE)
             .select("*")
             .eq("session_id", session_id)
-            .order("created_at", desc=False)  # <-- FIX
+            .order("created_at")
             .execute()
         )
-
         return response.data or []
 
     # ---------------------------------------------------------
@@ -44,17 +34,16 @@ class ParticipantRepository:
     # ---------------------------------------------------------
     def exists_awarded_participant(self, session_id: str) -> bool:
         response = (
-            supabase
-            .table(PARTICIPANT_TABLE)
+            supabase.table(PARTICIPANT_TABLE)
             .select("id")
             .eq("session_id", session_id)
             .eq("is_awarded", True)
             .execute()
         )
-        return bool(response.data)
+        return len(response.data or []) > 0
 
     # ---------------------------------------------------------
-    #  Insertar participante y disparar adjudicación si procede
+    #  Añadir participante REAL (futuro: usuario auténtico)
     # ---------------------------------------------------------
     def add_participant(
         self,
@@ -62,23 +51,21 @@ class ParticipantRepository:
         user_id: str,
         organization_id: str,
         amount: float,
-        price: float,
         quantity: int,
+        price: float,
     ) -> Optional[Dict]:
 
         now = datetime.utcnow().isoformat()
 
-        # Insertar participante
         insert_response = (
-            supabase
-            .table(PARTICIPANT_TABLE)
+            supabase.table(PARTICIPANT_TABLE)
             .insert({
                 "session_id": session_id,
                 "user_id": user_id,
                 "organization_id": organization_id,
                 "amount": amount,
-                "price": price,
                 "quantity": quantity,
+                "price": price,
                 "is_awarded": False,
                 "created_at": now
             })
@@ -86,14 +73,11 @@ class ParticipantRepository:
         )
 
         if not insert_response.data:
-            log_event(
-                action="participant_insert_error",
-                session_id=session_id,
-                user_id=user_id
-            )
             return None
 
         participant = insert_response.data[0]
+
+        session_repository.increment_pax_registered(session_id)
 
         log_event(
             action="participant_added",
@@ -102,47 +86,62 @@ class ParticipantRepository:
             metadata={"participant_id": participant["id"]}
         )
 
-        # 2. Incrementar pax_registered
-        session_repository.increment_pax_registered(session_id)
-
-        # 3. Obtener sesión actualizada
-        session = session_repository.get_session_by_id(session_id)
-        if not session:
-            log_event(
-                action="participant_added_session_not_found",
-                session_id=session_id
-            )
-            return participant
-
-        # 4. Si aforo completo → adjudicación
-        if (
-            session["pax_registered"] == session["capacity"]
-            and session["expires_at"] > datetime.utcnow().isoformat()
-        ):
-            adjudicator_engine.adjudicate_session(session_id)
-
         return participant
 
     # ---------------------------------------------------------
-    #  Marcar adjudicatario
+    #  🔥 MÉTODO NUEVO — Añadir participante de PRUEBA
     # ---------------------------------------------------------
-    def mark_as_awarded(self, participant_id: str, awarded_at: str) -> None:
-        (
-            supabase
-            .table(PARTICIPANT_TABLE)
-            .update({
-                "is_awarded": True,
-                "awarded_at": awarded_at
+    def add_test_participant(self, session_id: str) -> Optional[Dict]:
+        """
+        Método exclusivo para el panel administrativo.
+        NO existirá en la plataforma real.
+        """
+
+        # 1) Cargar sesión
+        session = session_repository.get_session_by_id(session_id)
+        if not session:
+            return None
+
+        if session["pax_registered"] >= session["capacity"]:
+            # blindaje
+            return None
+
+        now = datetime.utcnow().isoformat()
+
+        # usuario fake controlado
+        fake_user = f"test-user-{session['pax_registered']+1}"
+
+        insert_response = (
+            supabase.table(PARTICIPANT_TABLE)
+            .insert({
+                "session_id": session_id,
+                "user_id": fake_user,
+                "organization_id": session["organization_id"],
+                "amount": 0,
+                "quantity": 1,
+                "price": 0,
+                "is_awarded": False,
+                "created_at": now
             })
-            .eq("id", participant_id)
             .execute()
         )
 
+        if not insert_response.data:
+            return None
+
+        participant = insert_response.data[0]
+
+        # Incrementamos pax_registered
+        session_repository.increment_pax_registered(session_id)
+
         log_event(
-            action="participant_marked_awarded",
-            session_id=None,
-            metadata={"participant_id": participant_id, "awarded_at": awarded_at}
+            action="test_participant_added",
+            session_id=session_id,
+            user_id=fake_user,
+            metadata={"participant_id": participant["id"]}
         )
+
+        return participant
 
 
 # Instancia global
