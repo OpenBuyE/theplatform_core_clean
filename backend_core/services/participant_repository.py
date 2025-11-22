@@ -1,179 +1,125 @@
-# session_repository.py (VERSIÓN ESTABLE + ROLLING + COMPATIBLE)
+"""
+participant_repository.py
+Gestión de participantes en sesiones Compra Abierta.
+Compatibilidad con tabla: ca_session_participants
+"""
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Dict, Optional
 
 from .supabase_client import supabase
 from .audit_repository import log_event
 
-SESSION_TABLE = "ca_sessions"
-SERIES_TABLE = "ca_session_series"
+
+PARTICIPANT_TABLE = "ca_session_participants"
 
 
-class SessionRepository:
+class ParticipantRepository:
 
     # ---------------------------------------------------------
-    # Obtener una sesión por ID
+    #  Obtener participantes por sesión
     # ---------------------------------------------------------
-    def get_session_by_id(self, session_id: str) -> Optional[Dict]:
+    def get_participants_by_session(self, session_id: str) -> List[Dict]:
         response = (
-            supabase.table(SESSION_TABLE)
+            supabase.table(PARTICIPANT_TABLE)
             .select("*")
-            .eq("id", session_id)
-            .single()
+            .eq("session_id", session_id)
+            .order("created_at")       # PostgREST usa ORDER BY creado_at ASC por defecto
             .execute()
         )
-
-        return response.data if response and response.data else None
-
-    # ---------------------------------------------------------
-    # Listar sesiones por estado
-    # ---------------------------------------------------------
-    def get_sessions(self, status: str = None, limit: int = 200) -> List[Dict]:
-        query = supabase.table(SESSION_TABLE).select("*")
-
-        if status:
-            query = query.eq("status", status)
-
-        response = query.limit(limit).execute()
         return response.data or []
 
     # ---------------------------------------------------------
-    # Marcar una sesión como finished
+    #  Contar participantes
     # ---------------------------------------------------------
-    def mark_session_as_finished(self, session_id: str, finished_at: str):
-        supabase.table(SESSION_TABLE).update({
-            "status": "finished",
-            "finished_at": finished_at
-        }).eq("id", session_id).execute()
-
-        log_event(
-            action="session_finished",
-            session_id=session_id,
-            metadata={"finished_at": finished_at}
+    def count_participants(self, session_id: str) -> int:
+        response = (
+            supabase.table(PARTICIPANT_TABLE)
+            .select("id", count="exact")
+            .eq("session_id", session_id)
+            .execute()
         )
+        return response.count or 0
 
     # ---------------------------------------------------------
-    # Incrementar pax_registered
+    #  Insertar participante REAL (cuando ya exista wallet)
     # ---------------------------------------------------------
-    def increment_pax_registered(self, session_id: str):
-        session = self.get_session_by_id(session_id)
-        if not session:
-            return
-
-        current = session.get("pax_registered", 0)
-        new_value = current + 1
-
-        supabase.table(SESSION_TABLE).update({
-            "pax_registered": new_value
-        }).eq("id", session_id).execute()
-
-        log_event(
-            action="pax_registered_incremented",
-            session_id=session_id,
-            metadata={"new_value": new_value}
-        )
-
-    # ---------------------------------------------------------
-    # Crear nueva sesión parked
-    # ---------------------------------------------------------
-    def create_parked_session(
+    def add_participant(
         self,
-        product_id: str,
+        session_id: str,
+        user_id: str,
         organization_id: str,
-        series_id: str,
-        capacity: int,
+        amount: float,
+        price: float,
+        quantity: int,
     ) -> Optional[Dict]:
 
         now = datetime.utcnow().isoformat()
 
-        new_session = {
-            "product_id": product_id,
+        payload = {
+            "session_id": session_id,
+            "user_id": user_id,
             "organization_id": organization_id,
-            "series_id": series_id,
-            "sequence_number": self._get_next_sequence_number(series_id),
-            "status": "parked",
-            "capacity": capacity,
-            "pax_registered": 0,
-            "created_at": now,
+            "amount": amount,
+            "price": price,
+            "quantity": quantity,
+            "is_awarded": False,
+            "created_at": now
         }
 
-        response = supabase.table(SESSION_TABLE).insert(new_session).execute()
-        return response.data[0] if response.data else None
+        response = supabase.table(PARTICIPANT_TABLE).insert(payload).execute()
 
-    # ---------------------------------------------------------
-    # Obtener el siguiente sequence_number dentro de una serie
-    # ---------------------------------------------------------
-    def _get_next_sequence_number(self, series_id: str) -> int:
-        response = (
-            supabase.table(SESSION_TABLE)
-            .select("sequence_number")
-            .eq("series_id", series_id)
-            .order("sequence_number")
-            .execute()
-        )
-
-        rows = response.data or []
-        if not rows:
-            return 1
-
-        seqs = [r["sequence_number"] for r in rows if r["sequence_number"]]
-        return max(seqs) + 1 if seqs else 1
-
-    # ---------------------------------------------------------
-    # ACTIVAR sesión parked → active (5 días expiración)
-    # ---------------------------------------------------------
-    def activate_session(self, session_id: str) -> Optional[Dict]:
-
-        expires_at = (datetime.utcnow() + timedelta(days=5)).isoformat()
-
-        response = (
-            supabase.table(SESSION_TABLE)
-            .update({
-                "status": "active",
-                "activated_at": datetime.utcnow().isoformat(),
-                "expires_at": expires_at
-            })
-            .eq("id", session_id)
-            .execute()
-        )
-
-        data = response.data[0] if response.data else None
-
-        log_event(
-            action="session_activated",
-            session_id=session_id,
-            metadata={"expires_at": expires_at}
-        )
-
-        return data
-
-    # ---------------------------------------------------------
-    # ROLLING — Obtener siguiente sesión parked en la serie
-    # ---------------------------------------------------------
-    def get_next_session_in_series(self, session: Dict) -> Optional[Dict]:
-        """
-        Busca dentro de la misma serie la siguiente sesión con status='parked'.
-        """
-
-        series_id = session.get("series_id")
-        sequence = session.get("sequence_number")
-
-        if not series_id:
+        if not response.data:
+            log_event("participant_insert_error", session_id=session_id, metadata=payload)
             return None
 
-        response = (
-            supabase.table(SESSION_TABLE)
-            .select("*")
-            .eq("series_id", series_id)
-            .eq("status", "parked")
-            .order("sequence_number")
-            .execute()
+        participant = response.data[0]
+        log_event("participant_added", session_id=session_id, user_id=user_id)
+
+        return participant
+
+    # ---------------------------------------------------------
+    #  Añadir participante de prueba desde el panel
+    # ---------------------------------------------------------
+    def add_test_participant(self, session_id: str) -> Optional[Dict]:
+        """
+        Se usa EXCLUSIVAMENTE en el panel operativo para pruebas manuales.
+        NO EXISTIRÁ en producción.
+        """
+
+        now = datetime.utcnow().isoformat()
+
+        payload = {
+            "session_id": session_id,
+            "user_id": "TEST-USER",
+            "organization_id": None,
+            "amount": 0,
+            "price": 0,
+            "quantity": 1,
+            "is_awarded": False,
+            "created_at": now
+        }
+
+        response = supabase.table(PARTICIPANT_TABLE).insert(payload).execute()
+
+        if not response.data:
+            log_event(
+                "test_participant_insert_error",
+                session_id=session_id,
+                metadata=payload,
+            )
+            return None
+
+        participant = response.data[0]
+
+        log_event(
+            "test_participant_added",
+            session_id=session_id,
+            metadata={"participant_id": participant["id"]},
         )
 
-        sessions = response.data or []
-        return sessions[0] if sessions else None
+        return participant
 
 
-# Instancia global
-session_repository = SessionRepository()
+# Instancia global requerida por TODAS las vistas
+participant_repository = ParticipantRepository()
