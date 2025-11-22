@@ -6,50 +6,50 @@ from backend_core.services.audit_repository import log_event
 
 
 def render_park_sessions():
-    st.title("🟦 Sesiones Parked")
+    st.header("🅿️ Sesiones en Parque")
 
-    st.markdown("""
-Estas son las sesiones en **estado parked**, pendientes de activación.
-Una sesión parked puede ser activada manualmente o automáticamente
-cuando termina la anterior en su misma serie.
-    """)
-
-    st.divider()
-
-    sessions = session_repository.get_parked_sessions(limit=200)
+    # ---------------------------------------------------------
+    # Obtener sesiones en estado "parked"
+    # ---------------------------------------------------------
+    sessions = session_repository.get_sessions(status="parked")
 
     if not sessions:
         st.info("No hay sesiones parked.")
         return
 
+    # ---------------------------------------------------------
+    # Render/expanders de cada sesión
+    # ---------------------------------------------------------
     for s in sessions:
-        with st.expander(f"🟦 Sesión {s['id']} — Producto {s['product_id']}"):
-
-            st.write("**Estado:**", s["status"])
-            st.write("**Aforo requerido:**", s["capacity"])
-            st.write("**Pax registrados:**", s["pax_registered"])
+        with st.expander(f"🅿️ Sesión {s['id']} — Producto {s['product_id']}"):
+            st.write("**Producto:**", s["product_id"])
+            st.write("**Organización:**", s["organization_id"])
             st.write("**Serie:**", s["series_id"])
             st.write("**Sequence:**", s["sequence_number"])
+            st.write("**Capacidad:**", s["capacity"])
+            st.write("**Estado:**", s["status"])
+            st.write("**Creada:**", s.get("created_at"))
 
-            st.markdown("---")
+            st.divider()
 
-            st.subheader("🚀 Activar sesión manualmente")
-
-            if st.button(f"Activar sesión {s['id']}", key=f"activate_{s['id']}"):
+            # -------------------------------------------------
+            # Botón: ACTIVAR SESIÓN
+            # -------------------------------------------------
+            if st.button(f"🚀 Activar sesión {s['id']}", key=f"activate_{s['id']}"):
                 activated = session_repository.activate_session(s["id"])
 
                 if activated:
                     log_event(
-                        action="ui_activate_session",
+                        action="session_activated_from_panel",
                         session_id=s["id"],
-                        metadata={"activated_session_id": activated["id"]}
+                        metadata={"activated_at": activated.get("activated_at")}
                     )
-                    st.success(f"Sesión activada: {activated['id']}")
-                    st.experimental_rerun()
+                    st.success(f"Sesión activada correctamente: {activated['id']}")
+
+                    # 🔁 Reemplazo correcto de experimental_rerun()
+                    st.rerun()
+
                 else:
                     st.error("No se pudo activar la sesión.")
 
-            st.markdown("---")
-
-            with st.expander("🔍 Debug info"):
-                st.json(s)
+            st.divider()
