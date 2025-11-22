@@ -1,117 +1,97 @@
 import streamlit as st
-import pandas as pd
+import uuid
+from datetime import datetime
 
 from backend_core.services.session_repository import session_repository
 from backend_core.services.participant_repository import participant_repository
+from backend_core.services.session_engine import session_engine
 from backend_core.services.adjudicator_engine import adjudicator_engine
 from backend_core.services.audit_repository import log_event
 
 
-# ---------------------------------------------------------
-#  Vista: Sesiones Activas
-# ---------------------------------------------------------
 def render_active_sessions():
     st.header("🟢 Sesiones Activas")
 
-    # -----------------------------------------------------
-    # Obtener sesiones activas (máximo 200)
-    # -----------------------------------------------------
-    sessions = session_repository.get_sessions(status="active", limit=200)
+    # ---------------------------------------------------------
+    # Obtener sesiones activas
+    # ---------------------------------------------------------
+    sessions = session_repository.get_sessions(status="active", limit=50)
 
     if not sessions:
         st.info("No hay sesiones activas en este momento.")
         return
 
-    # -----------------------------------------------------
-    # Mostrar cada sesión activa en un expander
-    # -----------------------------------------------------
     for s in sessions:
-        with st.expander(f"🟢 Sesión {s['id']} — Producto {s['product_id']}"):
+        with st.expander(
+            f"🟢 Sesión {s['id']} — Serie {s['series_id']} — #{s['sequence_number']}"
+        ):
+            st.write("**Producto:**", s["product_id"])
             st.write("**Estado:**", s["status"])
             st.write("**Aforo:**", f"{s['pax_registered']} / {s['capacity']}")
-            st.write("**Sequence:**", s["sequence_number"])
-            st.write("**Serie:**", s["series_id"])
             st.write("**Activada en:**", s.get("activated_at"))
             st.write("**Expira en:**", s.get("expires_at"))
+            st.write("---")
 
-            st.divider()
+            # ---------------------------------------------------------
+            # BOTÓN: Ver participantes
+            # ---------------------------------------------------------
+            if st.button(f"Mostrar participantes — {s['id']}"):
+                participants = participant_repository.get_participants_by_session(s["id"])
+                if participants:
+                    st.write(participants)
+                else:
+                    st.info("No hay participantes en esta sesión.")
 
-            # -------------------------------------------------
-            # Participantes de la sesión
-            # -------------------------------------------------
-            participants = participant_repository.get_participants_by_session(s["id"])
-            df = pd.DataFrame(participants)
+            # ---------------------------------------------------------
+            # BOTÓN: Añadir participante de prueba
+            # ---------------------------------------------------------
+            if st.button(f"➕ Añadir Participante Test — {s['id']}"):
+                fake_id = str(uuid.uuid4())
 
-            if participants:
-                st.subheader("👥 Participantes")
-                st.dataframe(df)
-            else:
-                st.warning("Esta sesión no tiene participantes aún.")
-
-            st.divider()
-
-            # -------------------------------------------------
-            # BOTÓN 1 — Añadir participante TEST
-            # -------------------------------------------------
-            st.subheader("➕ Añadir Participante (TEST)")
-
-            col1, col2 = st.columns(2)
-
-            with col1:
-                default_price = 10.0
-                default_amount = 1.0
-                default_qty = 1
-
-                add_btn = st.button(
-                    f"Añadir participante TEST a {s['id']}",
-                    key=f"addtest_{s['id']}"
-                )
-
-            if add_btn:
-                new_p = participant_repository.add_participant(
+                participant_repository.add_participant(
                     session_id=s["id"],
-                    user_id="TEST-USER",
+                    user_id=f"test-user-{fake_id}",
                     organization_id=s["organization_id"],
-                    amount=default_amount,
-                    price=default_price,
-                    quantity=default_qty,
+                    amount=1.00,
+                    price=1.00,
+                    quantity=1,
                 )
 
-                if new_p:
-                    log_event(
-                        action="test_participant_added",
-                        session_id=s["id"],
-                        user_id="TEST-USER",
-                        metadata={"participant_id": new_p["id"]}
-                    )
-                    st.success("Participante TEST añadido.")
-                    st.rerun()
-                else:
-                    st.error("Error al añadir participante.")
+                log_event(
+                    action="test_participant_added",
+                    session_id=s["id"],
+                    metadata={"fake_id": fake_id},
+                )
 
-            st.divider()
+                st.success("Participante de prueba añadido.")
+                st.rerun()
 
-            # -------------------------------------------------
-            # BOTÓN 2 — Forzar adjudicación manual (TEST)
-            # -------------------------------------------------
-            st.subheader("🏁 Forzar Adjudicación Manual (TEST)")
-
-            force_btn = st.button(
-                f"Forzar adjudicación de la sesión {s['id']}",
-                key=f"forceadj_{s['id']}",
-                help="Usar solo para pruebas. Ejecuta el motor determinista aunque no haya llegado a aforo."
-            )
-
-            if force_btn:
-                awarded = adjudicator_engine.adjudicate_session(s["id"])
-
-                if awarded:
+            # ---------------------------------------------------------
+            # BOTÓN: Forzar adjudicación manual
+            # ---------------------------------------------------------
+            if st.button(f"🎯 Forzar adjudicación — {s['id']}"):
+                result = adjudicator_engine.adjudicate_session(s["id"])
+                if result:
                     st.success(
-                        f"Adjudicación ejecutada.\n"
-                        f"Participante adjudicatario: {awarded['id']}"
+                        f"Sesión adjudicada. Participante: {result['user_id']}"
                     )
-                    st.rerun()
                 else:
-                    st.error("No fue posible adjudicar la sesión (ver logs).")
+                    st.error("No se pudo adjudicar la sesión (ver auditoría).")
 
-    st.info("Fin de la lista de sesiones activas.")
+                st.rerun()
+
+            # ---------------------------------------------------------
+            # BOTÓN: Finalizar sesión manualmente
+            # ---------------------------------------------------------
+            if st.button(f"⛔ Finalizar sesión — {s['id']}"):
+                now_iso = datetime.utcnow().isoformat()
+                session_repository.mark_session_as_finished(s["id"], now_iso)
+
+                log_event(
+                    action="session_marked_finished_manual",
+                    session_id=s["id"],
+                    metadata={"finished_at": now_iso},
+                )
+
+                st.success("Sesión finalizada manualmente.")
+                st.rerun()
