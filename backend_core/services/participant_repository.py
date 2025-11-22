@@ -1,13 +1,16 @@
 """
 participant_repository.py
-Gestión de participantes de sesiones Compra Abierta.
+Gestión y escritura de participantes en sesiones Compra Abierta.
+Compatible con esquema ca_session_participants.
 """
 
 from datetime import datetime
 from typing import List, Dict, Optional
+
 from .supabase_client import supabase
 from .audit_repository import log_event
 from .session_repository import session_repository
+
 
 PARTICIPANT_TABLE = "ca_session_participants"
 
@@ -15,7 +18,7 @@ PARTICIPANT_TABLE = "ca_session_participants"
 class ParticipantRepository:
 
     # ---------------------------------------------------------
-    #  Obtener participantes de una sesión
+    #  Obtener participantes
     # ---------------------------------------------------------
     def get_participants_by_session(self, session_id: str) -> List[Dict]:
         response = (
@@ -23,47 +26,79 @@ class ParticipantRepository:
             .table(PARTICIPANT_TABLE)
             .select("*")
             .eq("session_id", session_id)
-            .order("created_at")
+            .order("created_at", desc=False)
             .execute()
         )
         return response.data or []
 
     # ---------------------------------------------------------
-    #  Comprobar si ya existe un adjudicatario
+    #  Insertar participante REAL (API / Smart Contract)
     # ---------------------------------------------------------
-    def exists_awarded_participant(self, session_id: str) -> bool:
-        response = (
-            supabase
-            .table(PARTICIPANT_TABLE)
-            .select("id")
-            .eq("session_id", session_id)
-            .eq("is_awarded", True)
-            .execute()
-        )
-        return len(response.data or []) > 0
+    def add_participant(
+        self,
+        session_id: str,
+        user_id: str,
+        amount: float = 0.0,
+        quantity: int = 1,
+        price: float = 0.0
+    ) -> Optional[Dict]:
 
-    # ---------------------------------------------------------
-    #  Añadir participante Test desde el panel
-    # ---------------------------------------------------------
-    def add_test_participant(self, session_id: str) -> Optional[Dict]:
+        now = datetime.utcnow().isoformat()
 
-        # 1) Cargar sesión real para obtener organization_id
+        # Obtener organization_id desde la sesión
         session = session_repository.get_session_by_id(session_id)
         if not session:
-            log_event(
-                action="test_participant_error_session_not_found",
-                session_id=session_id
-            )
             return None
 
-        org_id = session["organization_id"]
-        user_id = "TEST-USER"
-        now = datetime.utcnow().isoformat()
+        organization_id = session["organization_id"]
 
         payload = {
             "session_id": session_id,
             "user_id": user_id,
-            "organization_id": org_id,
+            "organization_id": organization_id,
+            "amount": amount,
+            "quantity": quantity,
+            "price": price,
+            "is_awarded": False,
+            "created_at": now
+        }
+
+        response = supabase.table(PARTICIPANT_TABLE).insert(payload).execute()
+
+        if not response.data:
+            log_event(
+                action="participant_insert_error",
+                session_id=session_id,
+                user_id=user_id
+            )
+            return None
+
+        # incrementar pax_registered
+        session_repository.increment_pax_registered(session_id)
+
+        return response.data[0]
+
+    # ---------------------------------------------------------
+    #  Insertar participante TEST (botón Active Sessions)
+    # ---------------------------------------------------------
+    def add_test_participant(self, session_id: str) -> Optional[Dict]:
+
+        now = datetime.utcnow().isoformat()
+
+        # 1) Recuperar sesión para obtener organization_id
+        session = session_repository.get_session_by_id(session_id)
+        if not session:
+            return None
+
+        organization_id = session["organization_id"]
+
+        # TEST user id
+        test_user = f"TEST-{now[:19]}"
+
+        payload = {
+            "session_id": session_id,
+            "user_id": test_user,
+            "organization_id": organization_id,
             "amount": 0,
             "price": 0,
             "quantity": 1,
@@ -71,35 +106,26 @@ class ParticipantRepository:
             "created_at": now
         }
 
-        # 2) Insertar participante Test
-        response = (
-            supabase
-            .table(PARTICIPANT_TABLE)
-            .insert(payload)
-            .execute()
-        )
+        response = supabase.table(PARTICIPANT_TABLE).insert(payload).execute()
 
         if not response.data:
             log_event(
                 action="test_participant_insert_error",
                 session_id=session_id,
-                metadata=payload
+                metadata={"user": test_user}
             )
             return None
 
-        participant = response.data[0]
-
-        # 3) Subir pax_registered
+        # actualizar pax_registered en sesiones
         session_repository.increment_pax_registered(session_id)
 
         log_event(
             action="test_participant_added",
             session_id=session_id,
-            user_id=user_id,
-            metadata={"participant_id": participant["id"]}
+            metadata={"test_user": test_user}
         )
 
-        return participant
+        return response.data[0]
 
 
 # Instancia global
