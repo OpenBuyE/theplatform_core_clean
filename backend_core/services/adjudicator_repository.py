@@ -1,19 +1,15 @@
 """
 adjudicator_repository.py
-Repositorio para semillas deterministas de adjudicación.
+Repositorio de semillas deterministas para las sesiones (ca_adjudication_seeds).
 
-Tabla: ca_adjudication_seeds
-Campos:
-- session_id (UUID, PK)
-- public_seed (TEXT, nullable)
-- created_at (TIMESTAMP)
+Responsabilidades:
+- Obtener seed pública configurada para una sesión.
+- Crear o actualizar seeds.
+- Mantener trazabilidad completa.
 """
 
-from typing import Optional, Dict, Any
-from datetime import datetime
-
+from typing import Optional, Dict
 from .supabase_client import supabase
-from .audit_repository import log_event
 
 
 SEED_TABLE = "ca_adjudication_seeds"
@@ -21,80 +17,70 @@ SEED_TABLE = "ca_adjudication_seeds"
 
 class AdjudicatorRepository:
     # ---------------------------------------------------------
-    #  Obtener seed pública para una sesión
+    # Obtener semilla pública para una sesión
     # ---------------------------------------------------------
     def get_public_seed_for_session(self, session_id: str) -> Optional[str]:
+        """
+        Devuelve la public_seed asociada a una sesión.
+        Si no hay registro → devuelve None sin lanzar error.
+        """
+
+        # ⚠️ Nunca usar .single() si puede no existir la fila
         response = (
             supabase
             .table(SEED_TABLE)
             .select("public_seed")
             .eq("session_id", session_id)
-            .single()
+            .limit(1)
             .execute()
         )
 
         if not response or not response.data:
             return None
 
-        return response.data.get("public_seed")
+        row = response.data[0]
+        return row.get("public_seed")
 
     # ---------------------------------------------------------
-    #  Establecer / actualizar seed pública
+    # Crear seed por primera vez
     # ---------------------------------------------------------
-    def set_public_seed(self, session_id: str, seed: str) -> None:
-        now = datetime.utcnow().isoformat()
-
-        # Upsert (insert or update)
+    def create_seed(self, session_id: str, public_seed: str) -> Optional[Dict]:
         response = (
             supabase
             .table(SEED_TABLE)
-            .upsert({
+            .insert({
                 "session_id": session_id,
-                "public_seed": seed,
-                "created_at": now,
+                "public_seed": public_seed,
             })
             .execute()
         )
 
-        log_event(
-            action="public_seed_set",
-            session_id=session_id,
-            metadata={"seed": seed}
-        )
+        return response.data[0] if response.data else None
 
     # ---------------------------------------------------------
-    #  Verificar si existe entrada para una sesión
+    # Actualizar seed
     # ---------------------------------------------------------
-    def seed_exists(self, session_id: str) -> bool:
+    def update_seed(self, session_id: str, public_seed: str) -> Optional[Dict]:
         response = (
             supabase
             .table(SEED_TABLE)
-            .select("session_id")
+            .update({"public_seed": public_seed})
             .eq("session_id", session_id)
             .execute()
         )
 
-        return bool(response.data)
+        return response.data[0] if response.data else None
 
     # ---------------------------------------------------------
-    #  Crear entrada vacía si no existe
+    # Crear o actualizar automáticamente
     # ---------------------------------------------------------
-    def ensure_seed_record(self, session_id: str) -> None:
-        if self.seed_exists(session_id):
-            return
+    def upsert_seed(self, session_id: str, public_seed: str) -> Optional[Dict]:
+        existing = self.get_public_seed_for_session(session_id)
 
-        now = datetime.utcnow().isoformat()
+        if existing is None:
+            return self.create_seed(session_id, public_seed)
 
-        supabase.table(SEED_TABLE).insert({
-            "session_id": session_id,
-            "public_seed": None,
-            "created_at": now,
-        }).execute()
-
-        log_event(
-            action="seed_record_created",
-            session_id=session_id,
-        )
+        return self.update_seed(session_id, public_seed)
 
 
 # Instancia global
