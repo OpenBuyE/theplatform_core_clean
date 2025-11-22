@@ -1,45 +1,30 @@
-"""
-active_sessions.py
-Vista de sesiones activas — versión adaptada al nuevo motor determinista.
-
-Características:
-- Lista sesiones activas
-- Muestra estado, aforo, expiración
-- Permite refrescar
-- Permite activar siguiente sesión manualmente (debug)
-"""
-
 import streamlit as st
+import pandas as pd
 
 from backend_core.services.session_repository import session_repository
-from backend_core.services.session_engine import session_engine
+from backend_core.services.participant_repository import participant_repository
+from backend_core.services.adjudicator_engine import adjudicator_engine
 from backend_core.services.audit_repository import log_event
 
 
+# ---------------------------------------------------------
+#  Vista: Sesiones Activas
+# ---------------------------------------------------------
 def render_active_sessions():
-    st.title("🟢 Sesiones Activas")
+    st.header("🟢 Sesiones Activas")
 
-    st.markdown(
-        """
-Esta tabla muestra todas las **sesiones activas** en el sistema.
-Una sesión activa:
-- Tiene un `expires_at` válido (máx 5 días).
-- Puede finalizar por dos causas:
-  1. Completar aforo → adjudicación inmediata (motor determinista)
-  2. No completar aforo → expiración (motor de expiración)
-        """
-    )
-
-    st.divider()
-
-    # Obtener sesiones activas
+    # -----------------------------------------------------
+    # Obtener sesiones activas (máximo 200)
+    # -----------------------------------------------------
     sessions = session_repository.get_sessions(status="active", limit=200)
 
     if not sessions:
         st.info("No hay sesiones activas en este momento.")
         return
 
-    # Mostrar sesiones en tabla
+    # -----------------------------------------------------
+    # Mostrar cada sesión activa en un expander
+    # -----------------------------------------------------
     for s in sessions:
         with st.expander(f"🟢 Sesión {s['id']} — Producto {s['product_id']}"):
             st.write("**Estado:**", s["status"])
@@ -49,36 +34,84 @@ Una sesión activa:
             st.write("**Activada en:**", s.get("activated_at"))
             st.write("**Expira en:**", s.get("expires_at"))
 
-            st.markdown("---")
+            st.divider()
 
-            # ============================================================
-            # Botón: Activar siguiente sesión (rolling manual)
-            # ============================================================
-            st.subheader("🔄 Rolling manual (debug)")
+            # -------------------------------------------------
+            # Participantes de la sesión
+            # -------------------------------------------------
+            participants = participant_repository.get_participants_by_session(s["id"])
+            df = pd.DataFrame(participants)
 
-            if st.button(
-                "Activar siguiente sesión en la serie",
-                key=f"roll_{s['id']}"
-            ):
-                activated = session_engine.activate_next_session_in_series(s)
+            if participants:
+                st.subheader("👥 Participantes")
+                st.dataframe(df)
+            else:
+                st.warning("Esta sesión no tiene participantes aún.")
 
-                if activated:
-                    st.success(f"Siguiente sesión activada: {activated['id']}")
+            st.divider()
+
+            # -------------------------------------------------
+            # BOTÓN 1 — Añadir participante TEST
+            # -------------------------------------------------
+            st.subheader("➕ Añadir Participante (TEST)")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                default_price = 10.0
+                default_amount = 1.0
+                default_qty = 1
+
+                add_btn = st.button(
+                    f"Añadir participante TEST a {s['id']}",
+                    key=f"addtest_{s['id']}"
+                )
+
+            if add_btn:
+                new_p = participant_repository.add_participant(
+                    session_id=s["id"],
+                    user_id="TEST-USER",
+                    organization_id=s["organization_id"],
+                    amount=default_amount,
+                    price=default_price,
+                    quantity=default_qty,
+                )
+
+                if new_p:
                     log_event(
-                        action="ui_manual_rolling",
+                        action="test_participant_added",
                         session_id=s["id"],
-                        metadata={"activated_session_id": activated["id"]}
+                        user_id="TEST-USER",
+                        metadata={"participant_id": new_p["id"]}
                     )
-                    st.experimental_rerun()
+                    st.success("Participante TEST añadido.")
+                    st.rerun()
                 else:
-                    st.warning("No existe siguiente sesión parked en la serie.")
+                    st.error("Error al añadir participante.")
 
-            st.markdown("---")
+            st.divider()
 
-            # Info debug (opcional)
-            with st.expander("🔍 Debug info"):
-                st.json(s)
+            # -------------------------------------------------
+            # BOTÓN 2 — Forzar adjudicación manual (TEST)
+            # -------------------------------------------------
+            st.subheader("🏁 Forzar Adjudicación Manual (TEST)")
 
+            force_btn = st.button(
+                f"Forzar adjudicación de la sesión {s['id']}",
+                key=f"forceadj_{s['id']}",
+                help="Usar solo para pruebas. Ejecuta el motor determinista aunque no haya llegado a aforo."
+            )
 
+            if force_btn:
+                awarded = adjudicator_engine.adjudicate_session(s["id"])
 
+                if awarded:
+                    st.success(
+                        f"Adjudicación ejecutada.\n"
+                        f"Participante adjudicatario: {awarded['id']}"
+                    )
+                    st.rerun()
+                else:
+                    st.error("No fue posible adjudicar la sesión (ver logs).")
 
+    st.info("Fin de la lista de sesiones activas.")
