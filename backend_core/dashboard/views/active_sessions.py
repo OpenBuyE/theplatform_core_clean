@@ -1,76 +1,58 @@
 import streamlit as st
-from datetime import datetime
-
 from backend_core.services.session_repository import session_repository
 from backend_core.services.participant_repository import participant_repository
-from backend_core.services.session_engine import session_engine
 from backend_core.services.adjudicator_engine import adjudicator_engine
 from backend_core.services.audit_repository import log_event
 
-
 def render_active_sessions():
-    st.header("🟢 Active Sessions")
+    st.header("🟢 Sesiones Activas")
 
-    # Obtener sesiones activas
-    sessions = session_repository.get_sessions(status="active", limit=200)
+    sessions = session_repository.get_sessions(status="active", limit=50)
 
     if not sessions:
         st.info("No hay sesiones activas.")
         return
 
-    for session in sessions:
-        sid = session["id"]
-        pax = session.get("pax_registered", 0)
-        cap = session.get("capacity", 0)
+    for s in sessions:
+        with st.expander(f"Sesión {s['id']} — Producto {s['product_id']}"):
+            st.write("**Estado:**", s["status"])
+            st.write("**Aforo:**", f"{s['pax_registered']} / {s['capacity']}")
+            st.write("**Serie:**", s["series_id"])
+            st.write("**Sequence:**", s["sequence_number"])
+            st.write("**Activada en:**", s.get("activated_at"))
+            st.write("**Expira en:**", s.get("expires_at"))
 
-        with st.expander(f"🟢 Sesión {sid} — {pax}/{cap} participantes"):
+            st.divider()
 
-            st.write("**Producto:**", session["product_id"])
-            st.write("**Organización:**", session["organization_id"])
-            st.write("**Serie:**", session["series_id"])
-            st.write("**Sequence:**", session["sequence_number"])
-            st.write("**Aforo:**", f"{pax}/{cap}")
-            st.write("---")
+            # Mostrar participantes actuales
+            participants = participant_repository.get_participants_by_session(s["id"])
+            st.subheader("Participantes Registrados")
+            st.write(participants)
 
-            # -----------------------------------------------------
-            # BOTÓN: Añadir PARTICIPANTE TEST sin sobrepasar aforo
-            # -----------------------------------------------------
-            st.subheader("➕ Añadir Participante Test")
+            st.divider()
 
-            if pax >= cap:
-                st.warning("⚠️ Aforo completo. No se pueden añadir más participantes.")
-            else:
-                col1, col2 = st.columns(2)
-                with col1:
-                    user_id = st.text_input(f"User ID (test) for {sid}", value="USER-TEST-1")
-                with col2:
-                    amount = st.number_input(f"Importe aportado", min_value=0.0, value=1.0)
-
-                if st.button(f"Añadir participante → {sid}"):
-                    result = participant_repository.add_participant(
-                        session_id=sid,
-                        user_id=user_id,
-                        organization_id=session["organization_id"],
-                        amount=amount,
+            # Botón para añadir participante de test
+            if s["pax_registered"] < s["capacity"]:
+                if st.button("➕ Añadir Participante Test", key=f"add_{s['id']}"):
+                    participant_repository.add_participant(
+                        session_id=s["id"],
+                        user_id="TEST-USER",
+                        organization_id=s["organization_id"],
+                        amount=10,
                         price=0,
                         quantity=1,
                     )
+                    st.success("Participante añadido.")
+                    st.rerun()
+            else:
+                st.warning("Aforo completo. No se pueden añadir más participantes.")
 
-                    if result:
-                        st.success("Participante añadido.")
-                        st.rerun()
+            # Si aforo completo → permitir adjudicar manualmente (TEST)
+            if s["pax_registered"] == s["capacity"]:
+                if st.button("⚡ Forzar Adjudicación", key=f"force_{s['id']}"):
+                    awarded = adjudicator_engine.adjudicate_session(s["id"])
+                    if awarded:
+                        st.success(f"Adjudicación completada. Participante: {awarded['user_id']}")
                     else:
-                        st.error("No se pudo añadir participante.")
-
-            st.write("---")
-
-            # -----------------------------------------------------
-            # BOTÓN: FORZAR ADJUDICACIÓN
-            # -----------------------------------------------------
-            if st.button(f"⚡ Forzar adjudicación {sid}"):
-                awarded = adjudicator_engine.adjudicate_session(sid)
-                if awarded:
-                    st.success(f"Adjudicatario: {awarded['user_id']}")
-                else:
-                    st.error("No se pudo adjudicar la sesión.")
-                st.rerun()
+                        st.error("Error adjudicando la sesión.")
+                    st.rerun()
