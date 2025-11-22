@@ -1,132 +1,181 @@
 """
-participant_repository.py
-Gestión y escritura de participantes en sesiones Compra Abierta.
-Compatible con esquema ca_session_participants.
+session_repository.py
+Repositorio de sesiones para Compra Abierta (ca_sessions)
+
+Incluye:
+- Crear sesión
+- Activar sesión
+- Marcar finished
+- Incrementar pax_registered
+- Obtener siguiente sesión en la serie (rolling)
 """
 
-from datetime import datetime
 from typing import List, Dict, Optional
+from datetime import datetime
 
 from .supabase_client import supabase
 from .audit_repository import log_event
-from .session_repository import session_repository
+
+SESSION_TABLE = "ca_sessions"
+SERIES_TABLE = "ca_session_series"
 
 
-PARTICIPANT_TABLE = "ca_session_participants"
-
-
-class ParticipantRepository:
-
-    # ---------------------------------------------------------
-    #  Obtener participantes
-    # ---------------------------------------------------------
-    def get_participants_by_session(self, session_id: str) -> List[Dict]:
-        response = (
-            supabase
-            .table(PARTICIPANT_TABLE)
-            .select("*")
-            .eq("session_id", session_id)
-            .order("created_at", desc=False)
-            .execute()
-        )
-        return response.data or []
+class SessionRepository:
 
     # ---------------------------------------------------------
-    #  Insertar participante REAL (API / Smart Contract)
+    # Crear sesión parked vinculada a una serie
     # ---------------------------------------------------------
-    def add_participant(
+    def create_session(
         self,
-        session_id: str,
-        user_id: str,
-        amount: float = 0.0,
-        quantity: int = 1,
-        price: float = 0.0
+        product_id: str,
+        organization_id: str,
+        series_id: str,
+        sequence_number: int,
+        capacity: int,
     ) -> Optional[Dict]:
 
         now = datetime.utcnow().isoformat()
 
-        # Obtener organization_id desde la sesión
-        session = session_repository.get_session_by_id(session_id)
-        if not session:
-            return None
-
-        organization_id = session["organization_id"]
-
         payload = {
-            "session_id": session_id,
-            "user_id": user_id,
+            "product_id": product_id,
             "organization_id": organization_id,
-            "amount": amount,
-            "quantity": quantity,
-            "price": price,
-            "is_awarded": False,
-            "created_at": now
+            "series_id": series_id,
+            "sequence_number": sequence_number,
+            "status": "parked",
+            "capacity": capacity,
+            "pax_registered": 0,
+            "created_at": now,
         }
 
-        response = supabase.table(PARTICIPANT_TABLE).insert(payload).execute()
+        response = supabase.table(SESSION_TABLE).insert(payload).execute()
 
         if not response.data:
-            log_event(
-                action="participant_insert_error",
-                session_id=session_id,
-                user_id=user_id
-            )
             return None
-
-        # incrementar pax_registered
-        session_repository.increment_pax_registered(session_id)
 
         return response.data[0]
 
     # ---------------------------------------------------------
-    #  Insertar participante TEST (botón Active Sessions)
+    # Obtener sesiones (filtros opcionales)
     # ---------------------------------------------------------
-    def add_test_participant(self, session_id: str) -> Optional[Dict]:
+    def get_sessions(
+        self,
+        status: Optional[str] = None,
+        limit: int = 200,
+    ) -> List[Dict]:
 
-        now = datetime.utcnow().isoformat()
+        query = supabase.table(SESSION_TABLE).select("*")
 
-        # 1) Recuperar sesión para obtener organization_id
-        session = session_repository.get_session_by_id(session_id)
-        if not session:
-            return None
+        if status:
+            query = query.eq("status", status)
 
-        organization_id = session["organization_id"]
+        query = query.order("created_at", desc=False).limit(limit)
+        response = query.execute()
 
-        # TEST user id
-        test_user = f"TEST-{now[:19]}"
+        return response.data or []
 
-        payload = {
-            "session_id": session_id,
-            "user_id": test_user,
-            "organization_id": organization_id,
-            "amount": 0,
-            "price": 0,
-            "quantity": 1,
-            "is_awarded": False,
-            "created_at": now
-        }
-
-        response = supabase.table(PARTICIPANT_TABLE).insert(payload).execute()
-
-        if not response.data:
-            log_event(
-                action="test_participant_insert_error",
-                session_id=session_id,
-                metadata={"user": test_user}
-            )
-            return None
-
-        # actualizar pax_registered en sesiones
-        session_repository.increment_pax_registered(session_id)
-
-        log_event(
-            action="test_participant_added",
-            session_id=session_id,
-            metadata={"test_user": test_user}
+    # ---------------------------------------------------------
+    # Obtener sesión por ID
+    # ---------------------------------------------------------
+    def get_session_by_id(self, session_id: str) -> Optional[Dict]:
+        response = (
+            supabase.table(SESSION_TABLE)
+            .select("*")
+            .eq("id", session_id)
+            .single()
+            .execute()
         )
 
+        return response.data if response else None
+
+    # ---------------------------------------------------------
+    # Activar sesión
+    # ---------------------------------------------------------
+    def activate_session(self, session_id: str) -> Optional[Dict]:
+        now = datetime.utcnow().isoformat()
+
+        expires_at = (
+            datetime.utcnow()
+            .replace(microsecond=0)
+            .isoformat()
+        )
+
+        response = (
+            supabase.table(SESSION_TABLE)
+            .update({
+                "status": "active",
+                "activated_at": now,
+                "expires_at": expires_at,
+            })
+            .eq("id", session_id)
+            .execute()
+        )
+
+        if not response.data:
+            return None
+
+        data = response.data[0]
+
+        log_event(
+            action="session_activated",
+            session_id=session_id,
+            metadata={"expires_at": expires_at},
+        )
+
+        return data
+
+    # ---------------------------------------------------------
+    # Incrementar pax_registered
+    # ---------------------------------------------------------
+    def increment_pax_registered(self, session_id: str) -> None:
+        session = self.get_session_by_id(session_id)
+        if not session:
+            return None
+
+        new_pax = session.get("pax_registered", 0) + 1
+
+        supabase.table(SESSION_TABLE).update({
+            "pax_registered": new_pax
+        }).eq("id", session_id).execute()
+
+    # ---------------------------------------------------------
+    # Marcar sesión como finalizada
+    # ---------------------------------------------------------
+    def mark_session_as_finished(self, session_id: str, finished_at: str) -> None:
+        supabase.table(SESSION_TABLE).update({
+            "status": "finished",
+            "finished_at": finished_at,
+        }).eq("id", session_id).execute()
+
+        log_event(
+            action="session_finished",
+            session_id=session_id,
+            metadata={"finished_at": finished_at},
+        )
+
+    # ---------------------------------------------------------
+    # Obtener la siguiente sesión de la serie
+    # ---------------------------------------------------------
+    def get_next_session_in_series(self, session: Dict) -> Optional[Dict]:
+
+        series_id = session["series_id"]
+        seq = session["sequence_number"]
+
+        response = (
+            supabase.table(SESSION_TABLE)
+            .select("*")
+            .eq("series_id", series_id)
+            .eq("status", "parked")
+            .gt("sequence_number", seq)
+            .order("sequence_number", desc=False)
+            .limit(1)
+            .execute()
+        )
+
+        if not response.data:
+            return None
+
         return response.data[0]
 
 
-# Instancia global
-participant_repository = ParticipantRepository()
+# Singleton global
+session_repository = SessionRepository()
