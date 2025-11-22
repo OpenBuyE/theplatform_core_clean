@@ -2,60 +2,100 @@
 adjudicator_repository.py
 Repositorio para semillas deterministas de adjudicación.
 
-Tablas usadas:
-- ca_adjudication_seeds
-    id (uuid)
-    session_id (uuid)
-    public_seed (text)
-    created_at (timestamptz)
-
-Responsabilidad:
-- Obtener/guardar la seed pública asociada a una sesión.
-- Asegurar siempre respuesta segura para el motor de adjudicación.
+Tabla: ca_adjudication_seeds
+Campos:
+- session_id (UUID, PK)
+- public_seed (TEXT, nullable)
+- created_at (TIMESTAMP)
 """
 
-from typing import Optional
+from typing import Optional, Dict, Any
 from datetime import datetime
+
 from .supabase_client import supabase
+from .audit_repository import log_event
 
-SEEDS_TABLE = "ca_adjudication_seeds"
+
+SEED_TABLE = "ca_adjudication_seeds"
 
 
-class AdjudicationSeedRepository:
-
+class AdjudicatorRepository:
     # ---------------------------------------------------------
-    # Obtener seed pública de una sesión
+    #  Obtener seed pública para una sesión
     # ---------------------------------------------------------
     def get_public_seed_for_session(self, session_id: str) -> Optional[str]:
-        """
-        Devuelve la seed pública asociada a una sesión.
-        Si no existe → None
-        """
-
         response = (
             supabase
-            .table(SEEDS_TABLE)
+            .table(SEED_TABLE)
             .select("public_seed")
             .eq("session_id", session_id)
-            .limit(1)
+            .single()
             .execute()
         )
 
-        # Manejo ultra seguro
-        if not response or not hasattr(response, "data") or not response.data:
+        if not response or not response.data:
             return None
 
-        row = response.data[0]
-        return row.get("public_seed")
+        return response.data.get("public_seed")
 
     # ---------------------------------------------------------
-    # Asignar seed pública a una sesión
+    #  Establecer / actualizar seed pública
     # ---------------------------------------------------------
-    def set_public_seed(self, session_id: str, seed: str) -> bool:
-        """
-        Guarda o actualiza una seed pública para una sesión.
-        """
+    def set_public_seed(self, session_id: str, seed: str) -> None:
+        now = datetime.utcnow().isoformat()
 
-        # Comprobar si ya existe seed para esta sesión
-        exists = (
+        # Upsert (insert or update)
+        response = (
+            supabase
+            .table(SEED_TABLE)
+            .upsert({
+                "session_id": session_id,
+                "public_seed": seed,
+                "created_at": now,
+            })
+            .execute()
+        )
 
+        log_event(
+            action="public_seed_set",
+            session_id=session_id,
+            metadata={"seed": seed}
+        )
+
+    # ---------------------------------------------------------
+    #  Verificar si existe entrada para una sesión
+    # ---------------------------------------------------------
+    def seed_exists(self, session_id: str) -> bool:
+        response = (
+            supabase
+            .table(SEED_TABLE)
+            .select("session_id")
+            .eq("session_id", session_id)
+            .execute()
+        )
+
+        return bool(response.data)
+
+    # ---------------------------------------------------------
+    #  Crear entrada vacía si no existe
+    # ---------------------------------------------------------
+    def ensure_seed_record(self, session_id: str) -> None:
+        if self.seed_exists(session_id):
+            return
+
+        now = datetime.utcnow().isoformat()
+
+        supabase.table(SEED_TABLE).insert({
+            "session_id": session_id,
+            "public_seed": None,
+            "created_at": now,
+        }).execute()
+
+        log_event(
+            action="seed_record_created",
+            session_id=session_id,
+        )
+
+
+# Instancia global
+adjudicator_repository = AdjudicatorRepository()
