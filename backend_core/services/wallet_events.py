@@ -46,3 +46,4 @@ class ForceMajeureRefundEvent(BaseModel):
     currency: str
     raw_payload: Dict[str, Any]
     received_at: datetime
+
