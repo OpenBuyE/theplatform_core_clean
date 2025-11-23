@@ -8,6 +8,7 @@ from backend_core.services import supabase_client
 from backend_core.services.contract_engine import (
     on_settlement_requested,
     on_delivery_confirmed,
+    on_contract_close,
 )
 from backend_core.services.contract_session_repository import (
     get_contract_by_session_id,
@@ -20,9 +21,10 @@ from backend_core.models.api_contract import (
 router = APIRouter(prefix="/internal", tags=["internal"])
 
 
-# ====================================================================================
-# EXISTENTE: Vista general del contrato
-# ====================================================================================
+# ================================================================
+# EXISTENTES: get-contract, request-settlement, confirm-delivery
+# ================================================================
+
 @router.get("/contract/{session_id}", response_model=ContractViewResponse)
 async def get_contract_view(session_id: str):
     session_resp = (
@@ -53,9 +55,6 @@ async def get_contract_view(session_id: str):
     return ContractViewResponse(data=view)
 
 
-# ====================================================================================
-# EXISTENTE: request-settlement
-# ====================================================================================
 @router.post("/contract/{session_id}/request-settlement")
 async def request_settlement(session_id: str, operator_user_id: str | None = None):
     contract = get_contract_by_session_id(session_id)
@@ -72,9 +71,6 @@ async def request_settlement(session_id: str, operator_user_id: str | None = Non
     }
 
 
-# ====================================================================================
-# ⭐ NUEVO: confirmación de entrega por adjudicatario
-# ====================================================================================
 @router.post("/contract/{session_id}/confirm-delivery")
 async def confirm_delivery(
     session_id: str,
@@ -83,18 +79,10 @@ async def confirm_delivery(
     delivery_location: str | None = Body(None, embed=True),
     delivery_metadata: dict | None = Body(None, embed=True),
 ):
-    """
-    Confirma que el producto ha sido entregado correctamente.
-    - Cambia estado contractual a DELIVERED.
-    - Registra delivered_at.
-    - Guarda método de entrega, ubicación y metadata adicional.
-    """
-
     contract = get_contract_by_session_id(session_id)
     if contract is None:
         raise HTTPException(404, "Contract not found")
 
-    # Paso al Contract Engine
     on_delivery_confirmed(
         session_id=session_id,
         adjudicatario_user_id=adjudicatario_user_id,
@@ -111,4 +99,37 @@ async def confirm_delivery(
         "delivery_method": delivery_method,
         "delivery_location": delivery_location,
         "delivery_metadata": delivery_metadata,
+    }
+
+
+# ================================================================
+# ⭐ NUEVO ENDPOINT → cierre formal del expediente contractual
+# ================================================================
+
+@router.post("/contract/{session_id}/close-contract")
+async def close_contract(
+    session_id: str,
+    operator_user_id: str | None = Body(None, embed=True),
+):
+    """
+    Cierra el expediente contractual cuando:
+    - el producto ha sido entregado (DELIVERED)
+    - o ha sido reembolsado (REFUNDED)
+    - o se ha completado el proceso sin entrega pendiente (PROVIDER_PAID)
+
+    Acción final del ciclo contractual.
+    """
+
+    contract = get_contract_by_session_id(session_id)
+    if contract is None:
+        raise HTTPException(404, "Contract not found")
+
+    # Paso al Contract Engine
+    on_contract_close(session_id, operator_user_id)
+
+    return {
+        "status": "ok",
+        "message": "Contract successfully closed",
+        "session_id": session_id,
+        "operator_user_id": operator_user_id,
     }
