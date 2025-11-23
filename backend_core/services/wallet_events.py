@@ -1,86 +1,48 @@
-"""
-wallet_events.py
-Capa simple y estable para generar eventos de wallet.
-Cada evento se registra en audit_logs mediante log_event().
-Sirve de base estable para pruebas unitarias y para conectar la
-Fintech → Wallet Orchestrator → Smart Contract Engine.
-"""
+# backend_core/services/wallet_events.py
+from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
-from .audit_repository import log_event
+from typing import Any, Dict, Optional
+
+from pydantic import BaseModel, Field
 
 
-def _now_iso() -> str:
-    return datetime.utcnow().isoformat()
+class DepositOkEvent(BaseModel):
+    """
+    Webhook recibido cuando MangoPay confirma que un depósito
+    (pago del comprador) ha sido autorizado / capturado.
+    """
+    fintech_operation_id: str = Field(..., alias="operation_id")
+    session_id: str
+    user_id: str
+    amount: float
+    currency: str
+    raw_payload: Dict[str, Any]
+    received_at: datetime
 
 
-# ---------------------------------------------------------
-# 1) Depósito autorizado en Fintech
-# ---------------------------------------------------------
-def emit_deposit_authorized(
-    session_id: str,
-    participant_id: str,
-    amount: float,
-    currency: str,
-    fintech_tx_id: str,
-    status: str
-) -> None:
-    log_event(
-        action="wallet_deposit_authorized",
-        session_id=session_id,
-        user_id=participant_id,
-        metadata={
-            "amount": amount,
-            "currency": currency,
-            "fintech_tx_id": fintech_tx_id,
-            "status": status,
-            "timestamp": _now_iso(),
-        }
-    )
+class SettlementCompletedEvent(BaseModel):
+    """
+    Webhook de confirmación de pago al proveedor.
+    """
+    fintech_operation_id: str = Field(..., alias="operation_id")
+    session_id: str
+    provider_id: str
+    amount: float
+    currency: str
+    raw_payload: Dict[str, Any]
+    received_at: datetime
 
 
-# ---------------------------------------------------------
-# 2) Liquidación completada (pago al proveedor + comisiones)
-# ---------------------------------------------------------
-def emit_settlement_executed(
-    session_id: str,
-    adjudicatario_id: str,
-    fintech_batch_id: str,
-    status: str
-) -> None:
-    log_event(
-        action="wallet_settlement_executed",
-        session_id=session_id,
-        user_id=adjudicatario_id,
-        metadata={
-            "fintech_batch_id": fintech_batch_id,
-            "status": status,
-            "timestamp": _now_iso(),
-        }
-    )
-
-
-# ---------------------------------------------------------
-# 3) Fuerza mayor: devolución del precio del producto
-# ---------------------------------------------------------
-def emit_force_majeure_refund(
-    session_id: str,
-    adjudicatario_id: str,
-    product_amount: float,
-    currency: str,
-    fintech_refund_tx_id: Optional[str],
-    reason: Optional[str]
-) -> None:
-    log_event(
-        action="wallet_force_majeure_refund",
-        session_id=session_id,
-        user_id=adjudicatario_id,
-        metadata={
-            "product_amount": product_amount,
-            "currency": currency,
-            "fintech_refund_tx_id": fintech_refund_tx_id,
-            "reason": reason,
-            "timestamp": _now_iso(),
-        }
-    )
+class ForceMajeureRefundEvent(BaseModel):
+    """
+    Webhook de reembolso por fuerza mayor.
+    IMPORTANTE: solo devuelve precio producto, no fees ni comisiones.
+    """
+    fintech_operation_id: str = Field(..., alias="operation_id")
+    session_id: str
+    adjudicatario_user_id: str
+    amount_refunded: float
+    currency: str
+    raw_payload: Dict[str, Any]
+    received_at: datetime
