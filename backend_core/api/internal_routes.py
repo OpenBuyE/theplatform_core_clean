@@ -1,11 +1,13 @@
 # backend_core/api/internal_routes.py
+
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Body
 
 from backend_core.services import supabase_client
 from backend_core.services.contract_engine import (
     on_settlement_requested,
+    on_delivery_confirmed,
 )
 from backend_core.services.contract_session_repository import (
     get_contract_by_session_id,
@@ -18,11 +20,11 @@ from backend_core.models.api_contract import (
 router = APIRouter(prefix="/internal", tags=["internal"])
 
 
+# ====================================================================================
+# EXISTENTE: Vista general del contrato
+# ====================================================================================
 @router.get("/contract/{session_id}", response_model=ContractViewResponse)
 async def get_contract_view(session_id: str):
-    """
-    Vista completa del contrato y pagos.
-    """
     session_resp = (
         supabase_client.table("ca_sessions")
         .select("*")
@@ -51,29 +53,15 @@ async def get_contract_view(session_id: str):
     return ContractViewResponse(data=view)
 
 
-# -------------------------------------------------------
-# ⭐ NUEVO ENDPOINT → request settlement (manual o admin)
-# -------------------------------------------------------
-
+# ====================================================================================
+# EXISTENTE: request-settlement
+# ====================================================================================
 @router.post("/contract/{session_id}/request-settlement")
 async def request_settlement(session_id: str, operator_user_id: str | None = None):
-    """
-    Endpoint interno para solicitar el settlement (pago al proveedor).
-    Este endpoint es usado por:
-    - Operadores (Admin)
-    - Panel interno de administración
-    - Automatizaciones internas si fuera necesario
-
-    Acciones:
-    - Cambia el estado contractual a WAITING_SETTLEMENT
-    - Deja traza en ca_audit_logs
-    """
-
     contract = get_contract_by_session_id(session_id)
     if contract is None:
         raise HTTPException(404, "Contract not found")
 
-    # Lógica contractual → engine
     on_settlement_requested(session_id, operator_user_id)
 
     return {
@@ -81,4 +69,46 @@ async def request_settlement(session_id: str, operator_user_id: str | None = Non
         "message": "Settlement request registered",
         "session_id": session_id,
         "operator_user_id": operator_user_id,
+    }
+
+
+# ====================================================================================
+# ⭐ NUEVO: confirmación de entrega por adjudicatario
+# ====================================================================================
+@router.post("/contract/{session_id}/confirm-delivery")
+async def confirm_delivery(
+    session_id: str,
+    adjudicatario_user_id: str = Body(..., embed=True),
+    delivery_method: str | None = Body(None, embed=True),
+    delivery_location: str | None = Body(None, embed=True),
+    delivery_metadata: dict | None = Body(None, embed=True),
+):
+    """
+    Confirma que el producto ha sido entregado correctamente.
+    - Cambia estado contractual a DELIVERED.
+    - Registra delivered_at.
+    - Guarda método de entrega, ubicación y metadata adicional.
+    """
+
+    contract = get_contract_by_session_id(session_id)
+    if contract is None:
+        raise HTTPException(404, "Contract not found")
+
+    # Paso al Contract Engine
+    on_delivery_confirmed(
+        session_id=session_id,
+        adjudicatario_user_id=adjudicatario_user_id,
+        delivery_method=delivery_method,
+        delivery_location=delivery_location,
+        delivery_metadata=delivery_metadata,
+    )
+
+    return {
+        "status": "ok",
+        "message": "Delivery confirmed",
+        "session_id": session_id,
+        "adjudicatario_user_id": adjudicatario_user_id,
+        "delivery_method": delivery_method,
+        "delivery_location": delivery_location,
+        "delivery_metadata": delivery_metadata,
     }
