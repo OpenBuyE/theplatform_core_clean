@@ -1,134 +1,209 @@
-"""
-wallet_orchestrator.py
-Capa de orquestación entre:
+# backend_core/services/wallet_orchestrator.py
+from __future__ import annotations
 
-- Fintech (MangoPay / pasarela)
-- Motor contractual (contract_engine)
-- Capa de eventos (wallet_events)
+from datetime import datetime
 
-En esta primera versión:
-- Recibe datos "ya validados" desde la API (fintech_routes).
-- Emite eventos de wallet (auditables).
-- Deja listo el punto para enganchar con contract_engine.
-
-Más adelante:
-- Validará consistencia de importes.
-- Verificará que TODOS los depósitos del grupo están OK
-  antes de permitir la adjudicación y la liquidación.
-"""
-
-from typing import Dict, Any
-
-from . import wallet_events
-# En el futuro podemos conectar con el motor contractual:
-# from .contract_engine import contract_engine
+from backend_core.models.payment_state import (
+    PaymentEvent,
+    PaymentStateSnapshot,
+)
+from backend_core.services import supabase_client
+from backend_core.services.audit_repository import AuditRepository
+from backend_core.services import contract_engine
+from backend_core.services.payment_state_machine import PaymentStateMachine
+from backend_core.services.wallet_events import (
+    DepositOkEvent,
+    SettlementCompletedEvent,
+    ForceMajeureRefundEvent,
+)
 
 
 class WalletOrchestrator:
     """
-    Orquestador principal de eventos de wallet / fintech.
+    Orquestador central para eventos de wallet / fintech.
+    NO ejecuta lógica contractual directamente: delega en contract_engine.
     """
 
-    # -----------------------------------------------------
-    # 1) Depósito autorizado / bloqueado en la Fintech
-    # -----------------------------------------------------
-    def handle_deposit_ok(self, data: Dict[str, Any]) -> None:
-        """
-        data esperado (viene de fintech_routes.DepositNotification.dict()):
-        {
-            "session_id": "...",
-            "participant_id": "...",
-            "amount": 30.0,
-            "currency": "EUR",
-            "fintech_tx_id": "...",
-            "status": "AUTHORIZED"
-        }
-        """
+    def __init__(self, audit_repo: AuditRepository):
+        self.audit_repo = audit_repo
 
-        session_id = data["session_id"]
-        participant_id = data["participant_id"]
-        amount = float(data["amount"])
-        currency = data.get("currency", "EUR")
-        fintech_tx_id = data.get("fintech_tx_id", "")
-        status = data.get("status", "")
+    # ---------- Helpers internos ----------
 
-        # Emitimos evento estructurado
-        wallet_events.emit_deposit_authorized(
-            session_id=session_id,
-            participant_id=participant_id,
-            amount=amount,
-            currency=currency,
-            fintech_tx_id=fintech_tx_id,
-            status=status,
+    def _load_payment_state(self, session_id: str) -> PaymentStateSnapshot:
+        """
+        Carga la fila de payment_session desde Supabase y la proyecta
+        a PaymentStateSnapshot.
+        ADAPTA al nombre real de tu tabla, por ejemplo: ca_payment_sessions
+        """
+        resp = (
+            supabase_client.table("ca_payment_sessions")
+            .select("*")
+            .eq("session_id", session_id)
+            .single()
+            .execute()
+        )
+        row = resp.data
+
+        return PaymentStateSnapshot(
+            payment_session_id=row["id"],
+            session_id=row["session_id"],
+            status=row["status"],
+            total_expected_amount=row.get("total_expected_amount"),
+            total_deposited_amount=row.get("total_deposited_amount"),
+            total_settled_amount=row.get("total_settled_amount"),
+            force_majeure=row.get("force_majeure", False),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+            metadata=row.get("metadata") or {},
         )
 
-        # FUTURO:
-        # contract_engine.on_participant_funded(session_id, participant_id, amount, currency)
-
-    # -----------------------------------------------------
-    # 2) Liquidación ejecutada por la Fintech
-    # -----------------------------------------------------
-    def handle_settlement(self, data: Dict[str, Any]) -> None:
+    def _save_payment_state(self, snapshot: PaymentStateSnapshot) -> None:
         """
-        data esperado (SettlementNotification.dict()):
-        {
-            "session_id": "...",
-            "adjudicatario_id": "...",
-            "fintech_batch_id": "...",
-            "status": "SETTLED"
-        }
+        Persiste el snapshot en Supabase.
         """
+        supabase_client.table("ca_payment_sessions").update(
+            {
+                "status": snapshot.status.value,
+                "total_expected_amount": snapshot.total_expected_amount,
+                "total_deposited_amount": snapshot.total_deposited_amount,
+                "total_settled_amount": snapshot.total_settled_amount,
+                "force_majeure": snapshot.force_majeure,
+                "updated_at": snapshot.updated_at.isoformat(),
+                "metadata": snapshot.metadata,
+            }
+        ).eq("id", snapshot.payment_session_id).execute()
 
-        session_id = data["session_id"]
-        adjudicatario_id = data["adjudicatario_id"]
-        fintech_batch_id = data.get("fintech_batch_id", "")
-        status = data.get("status", "")
+    # ---------- Handlers públicos ----------
 
-        wallet_events.emit_settlement_executed(
-            session_id=session_id,
-            adjudicatario_id=adjudicatario_id,
-            fintech_batch_id=fintech_batch_id,
-            status=status,
+    def handle_deposit_ok(self, event: DepositOkEvent) -> None:
+        """
+        1. Actualiza PaymentState (podría seguir en WAITING_DEPOSITS).
+        2. Registra en auditoría.
+        3. Informa al contract_engine (on_participant_funded).
+        """
+        snapshot = self._load_payment_state(event.session_id)
+
+        # Aquí puedes sumar a total_deposited_amount, etc. antes o después:
+        snapshot.total_deposited_amount = (snapshot.total_deposited_amount or 0.0) + event.amount
+
+        # Disparamos evento de "deposit authorized" (no cambia de estado global todavía):
+        new_snapshot = PaymentStateMachine.transition(
+            snapshot,
+            PaymentEvent.PARTICIPANT_DEPOSIT_AUTHORIZED,
         )
 
-        # FUTURO:
-        # contract_engine.on_settlement_completed(session_id, adjudicatario_id, fintech_batch_id)
+        self._save_payment_state(new_snapshot)
 
-    # -----------------------------------------------------
-    # 3) Fuerza mayor: devolución del precio del producto
-    # -----------------------------------------------------
-    def handle_force_majeure_refund(self, data: Dict[str, Any]) -> None:
-        """
-        data esperado (ForceMajeureRefund.dict()):
-        {
-            "session_id": "...",
-            "adjudicatario_id": "...",
-            "product_amount": 300.0,
-            "currency": "EUR",
-            "fintech_refund_tx_id": "...." | null,
-            "reason": "Stock irreversible" | null
-        }
-        """
-
-        session_id = data["session_id"]
-        adjudicatario_id = data["adjudicatario_id"]
-        product_amount = float(data["product_amount"])
-        currency = data.get("currency", "EUR")
-        fintech_refund_tx_id = data.get("fintech_refund_tx_id")
-        reason = data.get("reason")
-
-        wallet_events.emit_force_majeure_refund(
-            session_id=session_id,
-            adjudicatario_id=adjudicatario_id,
-            product_amount=product_amount,
-            currency=currency,
-            fintech_refund_tx_id=fintech_refund_tx_id,
-            reason=reason,
+        # Auditoría
+        self.audit_repo.log(
+            action="DEPOSIT_OK",
+            session_id=event.session_id,
+            user_id=event.user_id,
+            metadata={
+                "fintech_operation_id": event.fintech_operation_id,
+                "amount": event.amount,
+                "currency": event.currency,
+                "raw_payload": event.raw_payload,
+            },
         )
 
-        # FUTURO:
-        # contract_engine.on_force_majeure_refund(session_id, adjudicatario_id, product_amount, currency, reason)
+        # Integración contractual OFF-CHAIN
+        contract_engine.on_participant_funded(
+            session_id=event.session_id,
+            user_id=event.user_id,
+            amount=event.amount,
+            fintech_operation_id=event.fintech_operation_id,
+        )
 
+    def mark_all_deposits_ok(self, session_id: str) -> None:
+        """
+        Llamado normalmente desde contract_engine cuando detecta
+        que todos los depósitos requeridos están autorizados.
+        """
+        snapshot = self._load_payment_state(session_id)
+        new_snapshot = PaymentStateMachine.transition(
+            snapshot,
+            PaymentEvent.ALL_DEPOSITS_OK,
+        )
+        self._save_payment_state(new_snapshot)
 
-# Instancia global para usar desde la API
-wallet_orchestrator = WalletOrchestrator()
+        self.audit_repo.log(
+            action="ALL_DEPOSITS_OK",
+            session_id=session_id,
+            user_id=None,
+            metadata={},
+        )
+
+    def handle_settlement_completed(
+        self,
+        event: SettlementCompletedEvent,
+    ) -> None:
+        """
+        1. Actualiza estado a SETTLED.
+        2. Auditoría.
+        3. Notifica a contract_engine.on_settlement_completed.
+        """
+        snapshot = self._load_payment_state(event.session_id)
+
+        snapshot.total_settled_amount = (snapshot.total_settled_amount or 0.0) + event.amount
+
+        new_snapshot = PaymentStateMachine.transition(
+            snapshot,
+            PaymentEvent.SETTLEMENT_CONFIRMED,
+        )
+        self._save_payment_state(new_snapshot)
+
+        self.audit_repo.log(
+            action="SETTLEMENT_COMPLETED",
+            session_id=event.session_id,
+            user_id=None,
+            metadata={
+                "fintech_operation_id": event.fintech_operation_id,
+                "provider_id": event.provider_id,
+                "amount": event.amount,
+                "currency": event.currency,
+                "raw_payload": event.raw_payload,
+            },
+        )
+
+        contract_engine.on_settlement_completed(
+            session_id=event.session_id,
+            provider_id=event.provider_id,
+            amount=event.amount,
+            fintech_operation_id=event.fintech_operation_id,
+        )
+
+    def handle_force_majeure_refund(
+        self,
+        event: ForceMajeureRefundEvent,
+    ) -> None:
+        """
+        1. Lleva PaymentState a FORCE_MAJEURE (si no lo está).
+        2. Auditoría.
+        3. Notifica a contract_engine.on_force_majeure_refund.
+        """
+        snapshot = self._load_payment_state(event.session_id)
+
+        new_snapshot = PaymentStateMachine.transition(
+            snapshot,
+            PaymentEvent.FORCE_MAJEURE_TRIGGERED,
+        )
+        self._save_payment_state(new_snapshot)
+
+        self.audit_repo.log(
+            action="FORCE_MAJEURE_REFUND",
+            session_id=event.session_id,
+            user_id=event.adjudicatario_user_id,
+            metadata={
+                "fintech_operation_id": event.fintech_operation_id,
+                "amount_refunded": event.amount_refunded,
+                "currency": event.currency,
+                "raw_payload": event.raw_payload,
+            },
+        )
+
+        contract_engine.on_force_majeure_refund(
+            session_id=event.session_id,
+            adjudicatario_user_id=event.adjudicatario_user_id,
+            amount_refunded=event.amount_refunded,
+            fintech_operation_id=event.fintech_operation_id,
+        )
