@@ -1,10 +1,10 @@
 """
 participant_repository.py
-Gestión de participantes de sesiones Compra Abierta.
+Repositorio seguro para gestión de participantes.
 """
 
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional
 
 from .supabase_client import supabase
 from .audit_repository import log_event
@@ -15,85 +15,60 @@ PARTICIPANT_TABLE = "ca_session_participants"
 class ParticipantRepository:
 
     # ---------------------------------------------------------
-    # Obtener participantes por sesión
+    # Obtener participantes de una sesión
     # ---------------------------------------------------------
     def get_participants_by_session(self, session_id: str) -> List[Dict]:
         response = (
-            supabase
-            .table(PARTICIPANT_TABLE)
+            supabase.table(PARTICIPANT_TABLE)
             .select("*")
             .eq("session_id", session_id)
-            .order("created_at")      # SIN asc=True (PostgREST 11 no lo acepta)
+            .order("created_at")
             .execute()
         )
         return response.data or []
 
     # ---------------------------------------------------------
-    # Insertar participante de TEST
+    # Añadir participante de prueba (ONLY TEST)
     # ---------------------------------------------------------
-    def add_test_participant(self, session: Dict) -> Optional[Dict]:
+    def add_test_participant(self, session_id: str, organization_id: str, index: int):
+        """
+        Añade un participante simulado.
+        No requiere datos del usuario real.
+        """
 
         now = datetime.utcnow().isoformat()
 
         payload = {
-            "session_id": session["id"],
-            "user_id": f"TEST-USER-{session['pax_registered']+1}",
-            "organization_id": session["organization_id"],
+            "session_id": session_id,
+            "user_id": f"TEST-USER-{index}",
+            "organization_id": organization_id,
             "amount": 0,
-            "quantity": 0,
-            "price": 1,
+            "price": 0,
+            "quantity": 1,
             "is_awarded": False,
-            "created_at": now
+            "created_at": now,
         }
 
-        response = (
-            supabase
-            .table(PARTICIPANT_TABLE)
-            .insert(payload)
-            .execute()
-        )
+        response = supabase.table(PARTICIPANT_TABLE).insert(payload).execute()
 
         if not response.data:
             log_event(
-                action="participant_insert_error",
-                session_id=session["id"],
+                action="test_participant_insert_error",
+                session_id=session_id,
                 metadata={"payload": payload}
             )
             return None
 
-        participant = response.data[0]
+        inserted = response.data[0]
 
         log_event(
-            action="participant_added_test",
-            session_id=session["id"],
-            user_id=participant["user_id"],
-            metadata={"participant_id": participant["id"]}
+            action="test_participant_added",
+            session_id=session_id,
+            user_id=inserted["user_id"]
         )
 
-        return participant
-
-    # ---------------------------------------------------------
-    # Marcar adjudicatario
-    # ---------------------------------------------------------
-    def mark_as_awarded(self, participant_id: str, awarded_at: str) -> None:
-        (
-            supabase
-            .table(PARTICIPANT_TABLE)
-            .update({
-                "is_awarded": True,
-                "awarded_at": awarded_at
-            })
-            .eq("id", participant_id)
-            .execute()
-        )
-
-        log_event(
-            action="participant_marked_awarded",
-            metadata={"participant_id": participant_id}
-        )
+        return inserted
 
 
-# ---------------------------------------------------------
-# Instancia global (NECESARIA para que lo importe el panel)
-# ---------------------------------------------------------
+# Instancia global
 participant_repository = ParticipantRepository()
