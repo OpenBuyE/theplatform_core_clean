@@ -1,70 +1,35 @@
-"""
-server.py
-Servidor FastAPI principal para Compra Abierta.
+# server.py
+from __future__ import annotations
 
-Incluye:
-- Rutas internas (API general)
-- Rutas fintech
-- Healthcheck
-- CORS
-- Documentación Swagger / Redoc
-"""
-
-import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# --------------------------------------------
-# Importar routers
-# --------------------------------------------
-from backend_core.api.api import api_router        # API general
-from backend_core.api.fintech_routes import router as fintech_router
+from backend_core.api import fintech_routes
 
-
-# --------------------------------------------
-# Crear FastAPI app
-# --------------------------------------------
 app = FastAPI(
-    title="Compra Abierta — Backend API",
-    description="API principal del motor Compra Abierta.",
-    version="1.0.0"
+    title="Compra Abierta API",
+    version="1.0.0",
 )
 
-# --------------------------------------------
-# Configurar CORS (permitimos todo en desarrollo)
-# --------------------------------------------
+# CORS (ajusta orígenes permitidos)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],           # En producción limitar
+    allow_origins=["*"],  # ajusta en producción
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --------------------------------------------
-# Healthcheck
-# --------------------------------------------
-@app.get("/health")
-def health():
-    return {"status": "ok", "message": "API viva"}
+
+@app.get("/health", tags=["health"])
+async def healthcheck():
+    return {"status": "ok"}
 
 
-# --------------------------------------------
-# Montar routers
-# --------------------------------------------
-app.include_router(api_router, prefix="/api")
-app.include_router(fintech_router, prefix="/api")
+# Routers
+app.include_router(fintech_routes.router)
 
-
-# --------------------------------------------
-# Modo local (solo se ejecuta si se llama directamente)
-# --------------------------------------------
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(
-        "server:app",
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", 8000)),
-        reload=True
-    )
+# Aquí podrías incluir también:
+# from backend_core.api import internal_routes, session_routes, admin_routes, ...
+# app.include_router(internal_routes.router)
+# app.include_router(session_routes.router)
