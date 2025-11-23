@@ -1,134 +1,91 @@
-"""
-active_sessions.py — versión corregida
-Totalmente compatible con:
-participant_repository.add_test_participant(session_id, organization_id, index)
-"""
+# backend_core/dashboard/views/active_sessions.py
 
 import streamlit as st
+import requests
+from datetime import datetime
 
-from backend_core.services.session_repository import session_repository
-from backend_core.services.participant_repository import participant_repository
-from backend_core.services.session_engine import session_engine
-from backend_core.services.adjudicator_engine import adjudicator_engine
-from backend_core.services.audit_repository import log_event
+from backend_core.services.session_repository import (
+    get_active_sessions,
+    get_participants,
+    activate_session,     # por si se usa en botones
+)
+from backend_core.services.audit_repository import AuditRepository
+
+API_BASE = "http://localhost:8000"   # Ajusta si necesitas
+
+audit = AuditRepository()
 
 
-def render_active_sessions() -> None:
-    st.title("🟢 Sesiones Activas")
+def render_active_sessions():
+    st.title("Active Sessions")
+    st.write("Gestión de sesiones activas, participantes y adjudicación.")
 
-    st.divider()
-
-    # Obtener sesiones activas
-    sessions = session_repository.get_sessions(status="active", limit=200)
+    # --------------------------------------------------------------------
+    # 1) Mostrar sesiones activas
+    # --------------------------------------------------------------------
+    sessions = get_active_sessions()
 
     if not sessions:
         st.info("No hay sesiones activas.")
         return
 
     for s in sessions:
-        session_id = s["id"]
-        organization_id = s["organization_id"]
-        capacity = s.get("capacity", 0)
-        pax = s.get("pax_registered", 0)
+        st.subheader(f"🟢 Sesión Activa: {s['id']}")
+        st.write(f"- Product ID: {s['product_id']}")
+        st.write(f"- Organization ID: {s['organization_id']}")
+        st.write(f"- Capacity: {s['capacity']}")
+        st.write(f"- Pax Registered: {s['pax_registered']}")
+        st.write("---")
 
-        header = f"🟢 Sesión {session_id} — Producto {s.get('product_id', 'N/A')}"
-        with st.expander(header, expanded=False):
+        # --------------------------------------------------------------------
+        # 2) Mostrar participantes
+        # --------------------------------------------------------------------
+        st.write("👥 Participantes:")
+        participants = get_participants(s["id"])
 
-            st.write("**Estado:**", s.get("status"))
-            st.write("**Aforo:**", f"{pax} / {capacity}")
-            st.write("**Organization ID:**", organization_id)
-            st.write("**Serie:**", s.get("series_id"))
-            st.write("**Sequence:**", s.get("sequence_number"))
+        if participants:
+            st.json(participants)
+        else:
+            st.info("Sin participantes todavía.")
 
-            st.markdown("---")
-
-            # -----------------------------------------------------
-            # BOTÓN: Añadir Participante Test
-            # -----------------------------------------------------
-            st.subheader("👤 Añadir Participante Test (solo pruebas)")
-
-            if st.button(
-                f"➕ Añadir participante test a {session_id}",
-                key=f"add_part_{session_id}",
-            ):
-                if pax >= capacity:
-                    st.error("❌ Aforo completo. No se pueden añadir más participantes.")
-                else:
-                    # Índice = pax actual + 1
-                    index = pax + 1
-
-                    inserted = participant_repository.add_test_participant(
-                        session_id=session_id,
-                        organization_id=organization_id,
-                        index=index
-                    )
-
-                    if inserted:
-                        log_event(
-                            action="ui_add_test_participant",
-                            session_id=session_id,
-                            user_id=inserted.get("user_id"),
-                            metadata={"participant_id": inserted.get("id")}
-                        )
-                        st.success(f"✅ Participante añadido: {inserted.get('id')}")
-                        st.rerun()
-                    else:
-                        st.error("⚠️ No se pudo añadir el participante de prueba.")
-
-            st.markdown("---")
-
-            # -----------------------------------------------------
-            # BOTÓN: Forzar adjudicación
-            # -----------------------------------------------------
-            st.subheader("⚡ Forzar Adjudicación (TEST)")
-
-            if st.button(
-                f"⚡ Adjudicar sesión {session_id}",
-                key=f"force_adj_{session_id}",
-            ):
-                try:
-                    result = adjudicator_engine.adjudicate_session(session_id)
-                    if result:
-                        st.success(
-                            f"🎉 Adjudicatario: participante {result.get('id')} "
-                            f"(user_id={result.get('user_id')})"
-                        )
-                        st.rerun()
-                    else:
-                        st.warning("⚠️ No se pudo adjudicar la sesión. Revisar logs.")
-                except Exception as e:
-                    st.error(f"Error al adjudicar: {e}")
-
-            st.markdown("---")
-
-            # -----------------------------------------------------
-            # Listado de participantes
-            # -----------------------------------------------------
-            st.subheader("📋 Participantes en la Sesión")
-
+        # --------------------------------------------------------------------
+        # 3) Añadir participante test
+        # --------------------------------------------------------------------
+        if st.button(f"Añadir participante test a {s['id']}", key=f"add_pax_{s['id']}"):
             try:
-                parts = participant_repository.get_participants_by_session(session_id)
+                resp = requests.post(
+                    f"{API_BASE}/internal/debug/add-test-participant",
+                    json={"session_id": s["id"]},
+                    timeout=8,
+                )
+                st.success(resp.json())
+                audit.log(
+                    action="TEST_PARTICIPANT_ADDED",
+                    session_id=s["id"],
+                    metadata={},
+                )
+                st.experimental_rerun()
             except Exception as e:
-                st.error(f"Error al obtener participantes: {e}")
-                parts = []
+                st.error(f"Error: {e}")
 
-            if not parts:
-                st.info("No hay participantes aún.")
-            else:
-                st.write(f"Total participantes: {len(parts)}")
-                st.table([
-                    {
-                        "participant_id": p.get("id"),
-                        "user_id": p.get("user_id"),
-                        "organization": p.get("organization_id"),
-                        "amount": p.get("amount"),
-                        "price": p.get("price"),
-                        "is_awarded": p.get("is_awarded"),
-                        "awarded_at": p.get("awarded_at"),
-                        "created_at": p.get("created_at"),
-                    }
-                    for p in parts
-                ])
+        # --------------------------------------------------------------------
+        # 4) Forzar adjudicación
+        # --------------------------------------------------------------------
+        if st.button(f"Forzar adjudicación {s['id']}", key=f"award_{s['id']}"):
+            try:
+                resp = requests.post(
+                    f"{API_BASE}/internal/debug/force-award",
+                    json={"session_id": s["id"]},
+                    timeout=12,
+                )
+                st.success(resp.json())
+                audit.log(
+                    action="SESSION_FORCED_AWARD",
+                    session_id=s["id"],
+                    metadata={},
+                )
+                st.experimental_rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
 
-            with st.expander("🔍 Sesión RAW"):
-                st.json(s)
+        st.divider()
