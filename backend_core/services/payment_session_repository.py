@@ -1,96 +1,70 @@
 # backend_core/services/payment_session_repository.py
-from __future__ import annotations
 
+from __future__ import annotations
+from typing import Optional, Dict, Any
 from datetime import datetime
-from typing import Optional
 
 from backend_core.services import supabase_client
-from backend_core.models.payment_session import PaymentSession
-from backend_core.models.payment_state import (
-    PaymentStatus,
-    PaymentStateSnapshot,
-)
+
+
+PAYMENT_TABLE = "ca_payment_sessions"
 
 
 def create_payment_session(
     session_id: str,
     organization_id: str,
     expected_amount: float,
-) -> PaymentSession:
+) -> Any:
     """
-    Crea la fila en ca_payment_sessions con estado inicial WAITING_DEPOSITS.
-    Debe llamarse típicamente desde contract_engine.on_session_awarded.
+    Crea una PaymentSession recibiendo expected_amount desde ContractEngine.
+    Nunca calcula valores ni usa defaults.
     """
-    now = datetime.utcnow().isoformat()
-
     payload = {
         "session_id": session_id,
         "organization_id": organization_id,
-        "status": PaymentStatus.WAITING_DEPOSITS.value,
         "total_expected_amount": expected_amount,
         "total_deposited_amount": 0.0,
-        "total_settled_amount": 0.0,
-        "force_majeure": False,
-        "metadata": {},
-        "created_at": now,
-        "updated_at": now,
+        "created_at": datetime.utcnow().isoformat(),
+        "status": "WAITING_DEPOSITS",
     }
 
-    resp = supabase_client.table("ca_payment_sessions").insert(payload).execute()
-    row = resp.data[0]
-    return PaymentSession(**row)
+    resp = supabase_client.table(PAYMENT_TABLE).insert(payload).execute()
+    return resp.data[0]
 
 
-def get_payment_session_by_session_id(
-    session_id: str,
-) -> Optional[PaymentSession]:
-    """
-    Recupera la payment_session asociada a una sesión de compra.
-    """
+def get_payment_session_by_session_id(session_id: str) -> Optional[Any]:
     resp = (
-        supabase_client.table("ca_payment_sessions")
+        supabase_client.table(PAYMENT_TABLE)
         .select("*")
         .eq("session_id", session_id)
         .single()
         .execute()
     )
-
-    if not resp.data:
-        return None
-
-    return PaymentSession(**resp.data)
+    return resp.data
 
 
-def save_payment_session(ps: PaymentSession) -> None:
+def update_payment_deposit(session_id: str, amount: float) -> None:
     """
-    Persiste los cambios de un PaymentSession (por id).
-    No cambia created_at.
+    Suma depósitos sin calcular expected_amount. Solo incrementa deposited.
     """
-    supabase_client.table("ca_payment_sessions").update(
-        {
-            "status": ps.status.value,
-            "total_expected_amount": ps.total_expected_amount,
-            "total_deposited_amount": ps.total_deposited_amount,
-            "total_settled_amount": ps.total_settled_amount,
-            "force_majeure": ps.force_majeure,
-            "metadata": ps.metadata,
-            "updated_at": datetime.utcnow().isoformat(),
-        }
-    ).eq("id", ps.id).execute()
+    session = get_payment_session_by_session_id(session_id)
+    if not session:
+        return
+
+    new_total = float(session["total_deposited_amount"] or 0.0) + float(amount)
+
+    supabase_client.table(PAYMENT_TABLE).update(
+        {"total_deposited_amount": new_total}
+    ).eq("session_id", session_id).execute()
 
 
-def to_state_snapshot(ps: PaymentSession) -> PaymentStateSnapshot:
-    """
-    Convierte un PaymentSession a PaymentStateSnapshot para la state machine.
-    """
-    return PaymentStateSnapshot(
-        payment_session_id=ps.id,
-        session_id=ps.session_id,
-        status=ps.status,
-        total_expected_amount=ps.total_expected_amount,
-        total_deposited_amount=ps.total_deposited_amount,
-        total_settled_amount=ps.total_settled_amount,
-        force_majeure=ps.force_majeure,
-        updated_at=ps.updated_at,
-        metadata=ps.metadata,
-    )
+def mark_payment_settled(session_id: str) -> None:
+    supabase_client.table(PAYMENT_TABLE).update(
+        {"status": "SETTLED"}
+    ).eq("session_id", session_id).execute()
+
+
+def mark_force_majeure(session_id: str) -> None:
+    supabase_client.table(PAYMENT_TABLE).update(
+        {"status": "FORCE_MAJEURE"}
+    ).eq("session_id", session_id).execute()
