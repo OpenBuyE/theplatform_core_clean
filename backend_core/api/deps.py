@@ -1,25 +1,24 @@
-"""
-deps.py
-Dependencias simples para FastAPI.
+# backend_core/api/deps.py
+from __future__ import annotations
 
-En el futuro podemos añadir:
-- autenticación JWT
-- API Keys
-- control de organizaciones
-"""
+from functools import lru_cache
 
-from fastapi import Header, HTTPException
+from backend_core.services.audit_repository import AuditRepository
+from backend_core.services.wallet_orchestrator import WalletOrchestrator
 
 
-async def api_key_required(x_api_key: str = Header(None)):
+@lru_cache(maxsize=1)
+def get_audit_repo() -> AuditRepository:
     """
-    Validación simple basada en header: X-API-Key
-    En producción debe sustituirse por JWT o control real de acceso.
+    Repositorio de auditoría singleton (a nivel de proceso).
     """
-    # ⚠️ Ajustar según necesidad
-    VALID_KEY = "TEST-API-KEY"
+    return AuditRepository()
 
-    if x_api_key != VALID_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API key")
 
-    return True
+@lru_cache(maxsize=1)
+def get_wallet_orchestrator() -> WalletOrchestrator:
+    """
+    Orquestador de wallet singleton, reutilizando el mismo AuditRepository.
+    """
+    audit_repo = get_audit_repo()
+    return WalletOrchestrator(audit_repo=audit_repo)
