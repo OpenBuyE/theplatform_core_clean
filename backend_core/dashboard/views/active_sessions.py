@@ -2,16 +2,14 @@
 
 import streamlit as st
 import requests
-from datetime import datetime
 
 from backend_core.services.session_repository import (
     get_active_sessions,
     get_participants,
-    activate_session,     # por si se usa en botones
 )
 from backend_core.services.audit_repository import AuditRepository
 
-API_BASE = "http://localhost:8000"   # Ajusta si necesitas
+API_BASE = "http://localhost:8000"   # Ajusta si usas otro host/puerto
 
 audit = AuditRepository()
 
@@ -20,9 +18,6 @@ def render_active_sessions():
     st.title("Active Sessions")
     st.write("Gestión de sesiones activas, participantes y adjudicación.")
 
-    # --------------------------------------------------------------------
-    # 1) Mostrar sesiones activas
-    # --------------------------------------------------------------------
     sessions = get_active_sessions()
 
     if not sessions:
@@ -37,9 +32,6 @@ def render_active_sessions():
         st.write(f"- Pax Registered: {s['pax_registered']}")
         st.write("---")
 
-        # --------------------------------------------------------------------
-        # 2) Mostrar participantes
-        # --------------------------------------------------------------------
         st.write("👥 Participantes:")
         participants = get_participants(s["id"])
 
@@ -48,9 +40,7 @@ def render_active_sessions():
         else:
             st.info("Sin participantes todavía.")
 
-        # --------------------------------------------------------------------
-        # 3) Añadir participante test
-        # --------------------------------------------------------------------
+        # Añadir participante test (endpoint de debug opcional)
         if st.button(f"Añadir participante test a {s['id']}", key=f"add_pax_{s['id']}"):
             try:
                 resp = requests.post(
@@ -62,15 +52,14 @@ def render_active_sessions():
                 audit.log(
                     action="TEST_PARTICIPANT_ADDED",
                     session_id=s["id"],
+                    user_id=None,
                     metadata={},
                 )
                 st.experimental_rerun()
             except Exception as e:
                 st.error(f"Error: {e}")
 
-        # --------------------------------------------------------------------
-        # 4) Forzar adjudicación
-        # --------------------------------------------------------------------
+        # Forzar adjudicación (endpoint de debug opcional)
         if st.button(f"Forzar adjudicación {s['id']}", key=f"award_{s['id']}"):
             try:
                 resp = requests.post(
@@ -82,6 +71,7 @@ def render_active_sessions():
                 audit.log(
                     action="SESSION_FORCED_AWARD",
                     session_id=s["id"],
+                    user_id=None,
                     metadata={},
                 )
                 st.experimental_rerun()
