@@ -1,9 +1,9 @@
 # backend_core/dashboard/views/contract_payment_status.py
+
 import streamlit as st
 import requests
-from datetime import datetime
 
-API_BASE = "http://localhost:8000"   # AJUSTA si usas Streamlit Cloud o similar
+API_BASE = "http://localhost:8000"   # AJUSTA si usas otro host/puerto
 
 
 def render_contract_payment_status():
@@ -48,10 +48,6 @@ def render_contract_payment_status():
         else:
             st.warning("No existe PaymentSession para esta sesión.")
 
-        # ---------------------------------------------------
-        # Opcional: Acciones internas (admin/test/devtools)
-        # ---------------------------------------------------
-
         st.divider()
         st.subheader("⚙️ Acciones Internas (Admin / Test)")
 
@@ -95,4 +91,3 @@ def render_contract_payment_status():
                 st.success(r.json())
             except Exception as e:
                 st.error(f"Error: {e}")
-
