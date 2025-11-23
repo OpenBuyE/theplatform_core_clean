@@ -1,5 +1,15 @@
-# active_sessions.py
-# Vista de sesiones activas + añadir participantes test + bloquear aforo
+"""
+active_sessions.py
+Vista de sesiones activas — integrada con el motor determinista y el entorno de tests.
+
+Funcionalidades:
+- Listar sesiones activas (ca_sessions.status = 'active')
+- Mostrar aforo, estado y metadatos
+- Botón "Añadir Participante Test" (solo para pruebas internas)
+- Bloqueo estricto de aforo: no permite superar capacity
+- Botón "Forzar Adjudicación" que llama al adjudicator_engine
+- Listado de participantes de la sesión
+"""
 
 import streamlit as st
 
@@ -10,73 +20,156 @@ from backend_core.services.adjudicator_engine import adjudicator_engine
 from backend_core.services.audit_repository import log_event
 
 
-def render_active_sessions():
+def render_active_sessions() -> None:
+    st.title("🟢 Sesiones Activas")
 
-    st.title("🔵 Active Sessions")
+    st.markdown(
+        """
+Esta sección muestra todas las **sesiones activas** (`ca_sessions.status = 'active'`).
 
-    sessions = session_repository.get_sessions(status="active")
+Una sesión activa:
+
+- Tiene un `capacity` fijo (aforo obligatorio 100%).
+- Va incrementando `pax_registered` con cada participante.
+- En cuanto se completa el aforo, el motor determinista **adjudica** y la sesión pasa a `finished`.
+- Si no completa aforo en 5 días, el motor de expiración la marca `finished` sin adjudicación.
+        """
+    )
+
+    st.divider()
+
+    # ---------------------------------------------------------
+    # Obtener sesiones activas desde el repositorio
+    # ---------------------------------------------------------
+    sessions = session_repository.get_sessions(status="active", limit=200)
 
     if not sessions:
         st.info("No hay sesiones activas en este momento.")
         return
 
+    # ---------------------------------------------------------
+    # Recorrer cada sesión activa
+    # ---------------------------------------------------------
     for s in sessions:
-        with st.expander(f"🟢 Sesión {s['id']} — Producto {s['product_id']}"):
+        session_id = s["id"]
+        capacity = s.get("capacity", 0) or 0
+        pax = s.get("pax_registered", 0) or 0
 
-            st.write("**Estado:**", s["status"])
-            st.write("**Aforo:**", f"{s['pax_registered']} / {s['capacity']}")
-            st.write("**Serie:**", s["series_id"])
-            st.write("**Sequence:**", s["sequence_number"])
-            st.write("**Activada:**", s.get("activated_at"))
-            st.write("**Expira:**", s.get("expires_at"))
+        header = f"🟢 Sesión {session_id} — Producto {s.get('product_id', 'N/A')}"
+        with st.expander(header, expanded=False):
 
-            st.divider()
+            # Datos básicos de la sesión
+            st.write("**Estado:**", s.get("status"))
+            st.write("**Aforo:**", f"{pax} / {capacity}")
+            st.write("**Organization ID:**", s.get("organization_id"))
+            st.write("**Serie:**", s.get("series_id"))
+            st.write("**Sequence:**", s.get("sequence_number"))
+            st.write("**Activada en:**", s.get("activated_at"))
+            st.write("**Expira en:**", s.get("expires_at"))
 
-            # ------------------------------------------------------------
-            #  BOTÓN: Añadir participante test (blindado por capacidad)
-            # ------------------------------------------------------------
-            if st.button(f"Añadir Participante Test → {s['id']}", key=f"add_{s['id']}_test"):
-                # 1) Verificar aforo antes de intentar insertar
-                if s["pax_registered"] >= s["capacity"]:
-                    st.error("❌ Aforo completo. No se pueden añadir más participantes.")
-                else:
-                    new = participant_repository.add_test_participant(s["id"])
+            st.markdown("---")
 
-                    if new:
-                        log_event(
-                            action="test_participant_added",
-                            session_id=s["id"],
-                            metadata={"participant_id": new["id"]}
-                        )
-                        st.success(f"👍 Participante TEST añadido: {new['id']}")
-                        st.rerun()
+            # =================================================
+            # BOTÓN: Añadir Participante Test (solo entorno dev)
+            # =================================================
+            st.subheader("👤 Añadir Participante Test (solo pruebas)")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                if st.button(
+                    f"➕ Añadir participante test a {session_id}",
+                    key=f"add_part_{session_id}",
+                ):
+                    # Releer valores por seguridad
+                    current_pax = s.get("pax_registered", 0) or 0
+                    max_pax = s.get("capacity", 0) or 0
+
+                    if current_pax >= max_pax:
+                        st.error("❌ Aforo completo. No se pueden añadir más participantes.")
                     else:
-                        st.error("No se pudo añadir participante test.")
+                        # IMPORTANTE: aquí pasamos el dict completo de sesión,
+                        # no solo el ID, para evitar el TypeError anterior.
+                        new = participant_repository.add_test_participant(s)
 
-            st.divider()
+                        if new:
+                            log_event(
+                                action="ui_add_test_participant",
+                                session_id=session_id,
+                                user_id=new.get("user_id"),
+                                metadata={"participant_id": new.get("id")}
+                            )
+                            st.success(f"✅ Participante test añadido: {new.get('id')}")
+                            st.rerun()
+                        else:
+                            st.error("No se pudo añadir el participante de prueba.")
 
-            # ------------------------------------------------------------
-            #  BOTÓN: Forzar adjudicación (TEST manual)
-            # ------------------------------------------------------------
-            if st.button(f"⚡ Forzar Adjudicación → {s['id']}", key=f"force_adj_{s['id']}"):
-                result = adjudicator_engine.adjudicate_session(s["id"])
-                if result:
-                    st.success(f"🎉 Adjudicatario: {result['id']}")
-                else:
-                    st.error("No se pudo adjudicar esta sesión.")
+            with col2:
+                # =================================================
+                # BOTÓN: Forzar adjudicación (TEST manual)
+                # =================================================
+                st.markdown("### ⚡ Forzar Adjudicación (TEST)")
 
-            st.divider()
+                if st.button(
+                    f"⚡ Forzar Adjudicación → {session_id}",
+                    key=f"force_adj_{session_id}",
+                ):
+                    try:
+                        result = adjudicator_engine.adjudicate_session(session_id)
+                        if result:
+                            st.success(
+                                f"🎉 Adjudicatario: participante {result.get('id')} "
+                                f"(user_id={result.get('user_id')})"
+                            )
+                            log_event(
+                                action="ui_force_adjudication",
+                                session_id=session_id,
+                                user_id=result.get("user_id"),
+                                metadata={"participant_id": result.get("id")}
+                            )
+                            st.rerun()
+                        else:
+                            st.warning("No se pudo adjudicar la sesión (ver logs de auditoría).")
+                    except Exception as e:
+                        st.error(f"Error al forzar adjudicación: {e}")
 
-            # ------------------------------------------------------------
-            #  Mostrar lista de participantes
-            # ------------------------------------------------------------
-            parts = participant_repository.get_participants_by_session(s["id"])
+            st.markdown("---")
 
-            st.write("### Participantes:")
+            # =================================================
+            # PARTICIPANTES DE LA SESIÓN
+            # =================================================
+            st.subheader("📋 Participantes de la sesión")
+
+            try:
+                parts = participant_repository.get_participants_by_session(session_id)
+            except Exception as e:
+                st.error(f"Error al obtener participantes: {e}")
+                parts = []
+
             if not parts:
-                st.info("Sin participantes todavía.")
+                st.info("No hay participantes registrados en esta sesión.")
             else:
-                for p in parts:
-                    st.write(f"- {p['id']} — {'✔️' if p['is_awarded'] else ''}")
+                st.write(f"Total participantes: {len(parts)}")
+                # Mostrar una tabla simple
+                st.table(
+                    [
+                        {
+                            "participant_id": p.get("id"),
+                            "user_id": p.get("user_id"),
+                            "amount": p.get("amount"),
+                            "quantity": p.get("quantity"),
+                            "price": p.get("price"),
+                            "is_awarded": p.get("is_awarded"),
+                            "awarded_at": p.get("awarded_at"),
+                            "created_at": p.get("created_at"),
+                        }
+                        for p in parts
+                    ]
+                )
 
+            # =================================================
+            # DEBUG opcional
+            # =================================================
+            with st.expander("🔍 Debug: sesión cruda"):
+                st.json(s)
 
