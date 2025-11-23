@@ -7,6 +7,7 @@ from backend_core.services.session_repository import (
     get_active_sessions,
     get_participants,
 )
+from backend_core.services.product_repository import get_product
 from backend_core.services.audit_repository import AuditRepository
 
 API_BASE = "http://localhost:8000"   # Ajusta si usas otro host/puerto
@@ -26,13 +27,28 @@ def render_active_sessions():
 
     for s in sessions:
         st.subheader(f"🟢 Sesión Activa: {s['id']}")
-        st.write(f"- Product ID: {s['product_id']}")
-        st.write(f"- Organization ID: {s['organization_id']}")
-        st.write(f"- Capacity: {s['capacity']}")
-        st.write(f"- Pax Registered: {s['pax_registered']}")
+        st.write(f"Capacity: {s['capacity']} — Pax: {s['pax_registered']}")
+
+        # ----------------------------------------------------
+        # PRODUCTO
+        # ----------------------------------------------------
+        product = get_product(s["product_id"])
+        st.write("### 🛒 Producto asociado")
+        if product:
+            st.write(f"**{product['name']}** — {product['price_final']} €")
+            if product.get("sku"):
+                st.write(f"SKU: {product['sku']}")
+            if product.get("image_url"):
+                st.image(product["image_url"], width=220)
+        else:
+            st.warning("Producto no encontrado en products_v2")
+
         st.write("---")
 
-        st.write("👥 Participantes:")
+        # ----------------------------------------------------
+        # PARTICIPANTES
+        # ----------------------------------------------------
+        st.write("### 👥 Participantes")
         participants = get_participants(s["id"])
 
         if participants:
@@ -40,7 +56,9 @@ def render_active_sessions():
         else:
             st.info("Sin participantes todavía.")
 
-        # Añadir participante test (endpoint de debug opcional)
+        # ----------------------------------------------------
+        # Añadir participante test
+        # ----------------------------------------------------
         if st.button(f"Añadir participante test a {s['id']}", key=f"add_pax_{s['id']}"):
             try:
                 resp = requests.post(
@@ -52,14 +70,14 @@ def render_active_sessions():
                 audit.log(
                     action="TEST_PARTICIPANT_ADDED",
                     session_id=s["id"],
-                    user_id=None,
-                    metadata={},
                 )
                 st.experimental_rerun()
             except Exception as e:
                 st.error(f"Error: {e}")
 
-        # Forzar adjudicación (endpoint de debug opcional)
+        # ----------------------------------------------------
+        # Forzar adjudicación
+        # ----------------------------------------------------
         if st.button(f"Forzar adjudicación {s['id']}", key=f"award_{s['id']}"):
             try:
                 resp = requests.post(
@@ -71,8 +89,6 @@ def render_active_sessions():
                 audit.log(
                     action="SESSION_FORCED_AWARD",
                     session_id=s["id"],
-                    user_id=None,
-                    metadata={},
                 )
                 st.experimental_rerun()
             except Exception as e:
