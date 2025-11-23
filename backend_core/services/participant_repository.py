@@ -4,7 +4,7 @@ Repositorio seguro para gestión de participantes.
 """
 
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from .supabase_client import supabase
 from .audit_repository import log_event
@@ -30,11 +30,15 @@ class ParticipantRepository:
     # ---------------------------------------------------------
     # Añadir participante de prueba (ONLY TEST)
     # ---------------------------------------------------------
-    def add_test_participant(self, session_id: str, organization_id: str, index: int):
+    def add_test_participant(self, session: Dict):
         """
-        Añade un participante simulado.
-        No requiere datos del usuario real.
+        Recibe el dict completo de la sesión.
+        Con esto evitamos errores por índices incorrectos.
         """
+
+        session_id = session["id"]
+        organization_id = session["organization_id"]
+        index = (session.get("pax_registered") or 0) + 1
 
         now = datetime.utcnow().isoformat()
 
