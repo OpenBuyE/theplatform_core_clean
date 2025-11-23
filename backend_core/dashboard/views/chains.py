@@ -1,67 +1,48 @@
-"""
-chains.py
-Vista de series y cadenas de sesiones.
-
-Responsabilidades:
-- Listar sesiones agrupadas por series_id
-- Ordenar las sesiones por sequence_number
-- Manejo seguro de valores None o inválidos
-"""
+# backend_core/dashboard/views/chains.py
 
 import streamlit as st
 
-from backend_core.services.session_repository import session_repository
+from backend_core.services import supabase_client
 
 
 def render_chains():
-    st.title("🔗 Cadenas de Sesiones (Series)")
+    st.title("Chains (Series de sesiones)")
+    st.write("Visualiza las series de sesiones (rolling) y sus sesiones asociadas.")
 
-    st.write(
-        """
-Esta vista agrupa todas las sesiones por su `series_id`  
-y muestra cómo se encadenan en orden de `sequence_number`.
-"""
+    # Cargar series
+    series_resp = (
+        supabase_client.table("ca_session_series")
+        .select("*")
+        .order("created_at")
+        .execute()
     )
+    series_list = series_resp.data or []
 
-    st.divider()
-
-    # Obtener TODAS las sesiones (parked, active, finished)
-    sessions = session_repository.get_sessions(limit=500)
-
-    if not sessions:
-        st.info("No hay sesiones registradas.")
+    if not series_list:
+        st.info("No hay series de sesiones.")
         return
 
-    # Agrupar por series_id
-    chains = {}
-    for s in sessions:
-        sid = s.get("series_id") or "SIN_SERIE"
-        if sid not in chains:
-            chains[sid] = []
-        chains[sid].append(s)
+    for series in series_list:
+        st.subheader(f"🧬 Serie: {series['id']}")
+        st.write(f"- Organization ID: {series['organization_id']}")
+        st.write(f"- Product ID: {series['product_id']}")
+        st.write(f"- Created at: {series['created_at']}")
+        st.write("---")
 
-    # Ordenación robusta
-    def safe_seq_number(sess):
-        """
-        Devuelve el sequence_number si existe y es int.
-        Si es None, lo empuja al final.
-        """
-        seq = sess.get("sequence_number")
-        if isinstance(seq, int):
-            return seq
-        return 999999999  # valor grande para mandar al final
+        # Cargar sesiones de la serie
+        sessions_resp = (
+            supabase_client.table("ca_sessions")
+            .select("*")
+            .eq("series_id", series["id"])
+            .order("created_at")
+            .execute()
+        )
+        sessions = sessions_resp.data or []
 
-    # Ordenar cada serie:
-    for sid in chains:
-        chains[sid] = sorted(chains[sid], key=safe_seq_number)
+        if sessions:
+            st.write("Sesiones de esta serie:")
+            st.json(sessions)
+        else:
+            st.info("No hay sesiones asociadas a esta serie todavía.")
 
-    # Renderizado
-    for series_id, series_sessions in chains.items():
-        with st.expander(f"📦 Serie: {series_id}"):
-            for s in series_sessions:
-                st.write(
-                    f"- **Sesión:** {s['id']} "
-                    f" | producto `{s.get('product_id')}` "
-                    f" | seq `{s.get('sequence_number')}` "
-                    f" | estado `{s.get('status')}`"
-                )
+        st.divider()
