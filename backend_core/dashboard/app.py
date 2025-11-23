@@ -1,109 +1,72 @@
-"""
-app.py
-Panel Streamlit del backend Compra Abierta (The Platform Core Clean)
-
-Vistas disponibles:
-- Parked Sessions
-- Active Sessions
-- Session Chains
-- History
-- Audit Logs
-- Admin Users
-- Admin Seeds
-- Admin Engine   ← NUEVO PANEL DE MOTOR
-
-Este archivo gestiona:
-- El enrutado del sidebar
-- La carga modular de cada vista
-- La estructura global del panel
-"""
+# backend_core/dashboard/app.py
 
 import streamlit as st
 
-# Importación de vistas existentes
 from backend_core.dashboard.views.park_sessions import render_park_sessions
 from backend_core.dashboard.views.active_sessions import render_active_sessions
 from backend_core.dashboard.views.chains import render_chains
+from backend_core.dashboard.views.history_sessions import render_history_sessions
 from backend_core.dashboard.views.audit_logs import render_audit_logs
-from backend_core.dashboard.views.history_sessions import render_history
-from backend_core.dashboard.views.admin_users import render_admin_users
-
-# Nuevas vistas
-from backend_core.dashboard.views.admin_seeds import render_admin_seeds
 from backend_core.dashboard.views.admin_engine import render_admin_engine
+from backend_core.dashboard.views.admin_seeds import render_admin_seeds
+from backend_core.dashboard.views.admin_users import render_admin_users
+from backend_core.dashboard.views.contract_payment_status import render_contract_payment_status
 
 
-# ---------------------------------------------------------
-# Configuración general de página
-# ---------------------------------------------------------
-st.set_page_config(
-    page_title="Compra Abierta — Backend Panel",
-    page_icon="🟩",
-    layout="wide",
-)
+def main():
+    st.set_page_config(page_title="Compra Abierta Dashboard", layout="wide")
 
+    if "page" not in st.session_state:
+        st.session_state["page"] = "Parked Sessions"
 
-# ---------------------------------------------------------
-# Sidebar (Navegación / Menú principal)
-# ---------------------------------------------------------
-def render_sidebar():
-    st.sidebar.title("📊 Panel Operativo — Compra Abierta")
-
-    selected = st.sidebar.radio(
-        "Navegación",
-        options=[
+    st.sidebar.title("Compra Abierta")
+    page = st.sidebar.radio(
+        "Panel",
+        [
             "Parked Sessions",
             "Active Sessions",
             "Chains",
             "History",
             "Audit Logs",
-            "Admin Users",
+            "Admin Engine",
             "Admin Seeds",
-            "Admin Engine",   # ← NUEVO
+            "Admin Users",
+            "Contract & Payment Status",
         ],
-        index=1,
+        index=[
+            "Parked Sessions",
+            "Active Sessions",
+            "Chains",
+            "History",
+            "Audit Logs",
+            "Admin Engine",
+            "Admin Seeds",
+            "Admin Users",
+            "Contract & Payment Status",
+        ].index(st.session_state["page"]),
     )
 
-    st.sidebar.markdown("---")
-    st.sidebar.caption("The Platform Core Clean — Deterministic Engine")
+    st.session_state["page"] = page
 
-    return selected
-
-
-# ---------------------------------------------------------
-# Renderizado principal
-# ---------------------------------------------------------
-def main():
-    view = render_sidebar()
-
-    if view == "Parked Sessions":
+    if page == "Parked Sessions":
         render_park_sessions()
-
-    elif view == "Active Sessions":
+    elif page == "Active Sessions":
         render_active_sessions()
-
-    elif view == "Chains":
+    elif page == "Chains":
         render_chains()
-
-    elif view == "History":
-        render_history()
-
-    elif view == "Audit Logs":
+    elif page == "History":
+        render_history_sessions()
+    elif page == "Audit Logs":
         render_audit_logs()
-
-    elif view == "Admin Users":
-        render_admin_users()
-
-    elif view == "Admin Seeds":
-        render_admin_seeds()
-
-    elif view == "Admin Engine":
+    elif page == "Admin Engine":
         render_admin_engine()
-
-    else:
-        st.error("Vista no reconocida.")
+    elif page == "Admin Seeds":
+        render_admin_seeds()
+    elif page == "Admin Users":
+        render_admin_users()
+    elif page == "Contract & Payment Status":
+        render_contract_payment_status()
 
 
 if __name__ == "__main__":
     main()
-
