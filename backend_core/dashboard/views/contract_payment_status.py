@@ -2,100 +2,95 @@
 
 import streamlit as st
 
-from backend_core.services.contract_engine import contract_engine
 from backend_core.services.session_repository import get_session_by_id
 from backend_core.services.participant_repository import get_participants_for_session
 from backend_core.services.product_repository import get_product
-from backend_core.services.module_repository import get_session_module
+from backend_core.services.module_repository import get_module_for_session
+from backend_core.services.payment_state_machine import get_payment_session
 
 
 # =======================================================
-# CONTRACT & PAYMENT STATUS – MÓDULO AWARE
+# VISTA: CONTRACT & PAYMENT STATUS
 # =======================================================
 
 def render_contract_payment_status():
+    st.header("Contract & Payment Status")
 
-    st.header("📄 Contract & Payment Status")
-
-    session_id = st.text_input("Session ID:", placeholder="UUID de la sesión")
+    session_id = st.text_input("Introduce el ID de la sesión")
 
     if not session_id:
-        st.info("Introduce un Session ID.")
+        st.info("Introduce un session_id para ver el estado contractual y de pagos.")
         return
 
-    st.markdown("---")
+    if st.button("Consultar estado"):
+        _render_session_status(session_id)
 
-    # =======================================================
-    # Obtener estado contractual completo
-    # =======================================================
 
-    data = contract_engine.get_contract_status(session_id)
-
-    if not data:
-        st.error("Sesión no encontrada.")
+def _render_session_status(session_id: str):
+    # -------------------------
+    # Sesión
+    # -------------------------
+    session = get_session_by_id(session_id)
+    if not session:
+        st.error(f"No se ha encontrado la sesión {session_id}.")
         return
 
-    session = data["session"]
-    module = data["module"]
-    payment = data["payment"]
-
-    st.subheader(f"Sesión {session['id']}")
+    st.subheader("Datos de la sesión")
+    st.write(f"**Session ID:** {session['id']}")
     st.write(f"**Estado:** {session['status']}")
-    st.write(f"**Módulo:** {module['module_code']} — {module['name']}")
+    st.write(f"**Aforo:** {session['pax_registered']} / {session['capacity']}")
+    st.write(f"**Series ID:** {session.get('series_id')}")
+    st.write(f"**Sequence #:** {session.get('sequence_number')}")
+    st.write(f"**Activated at:** {session.get('activated_at')}")
+    st.write(f"**Finished at:** {session.get('finished_at')}")
 
-    # =======================================================
-    # Mostrar información del producto
-    # =======================================================
-
+    # -------------------------
+    # Producto
+    # -------------------------
     product = get_product(session["product_id"])
     if product:
-        st.write(f"📦 Producto: **{product['name']}** — {product['price']} €")
-        if product.get("image_url"):
-            st.image(product["image_url"], width=200)
+        st.subheader("Producto")
+        st.write(f"**Nombre:** {product['name']}")
+        st.write(f"**Precio:** {product['price']}€")
 
-    st.markdown("---")
+    # -------------------------
+    # Módulo
+    # -------------------------
+    module = get_module_for_session(session_id)
+    if module:
+        st.subheader("Módulo")
+        st.write(f"**Module ID:** {module['id']}")
+        st.write(f"**Module Code:** {module['module_code']}")
+        st.write(f"**Module Status:** {module.get('module_status')}")
+        st.write(f"**Has Award:** {module.get('has_award')}")
 
-    # =======================================================
-    # MÓDULO C — PRELAUNCH
-    # =======================================================
+    # -------------------------
+    # Participantes
+    # -------------------------
+    participants = get_participants_for_session(session_id)
+    st.subheader("Participantes")
 
-    if module["module_code"] == "C_PRELAUNCH":
-        st.warning("🔒 Módulo PRELAUNCH — No existe flujo de contrato ni pagos.")
-        st.info("Esta sesión es únicamente informativa y no admite participantes.")
+    if not participants:
+        st.info("La sesión no tiene participantes.")
+    else:
+        for p in participants:
+            awarded = " ✅ ADJUDICATARIO" if p.get("is_awarded") else ""
+            st.write(
+                f"- Participant ID: {p['id']} — User: {p['user_id']} — "
+                f"Amount: {p['amount']} — Qty: {p['quantity']}{awarded}"
+            )
+
+    # -------------------------
+    # Estado de pagos (Payment State Machine)
+    # -------------------------
+    st.subheader("Payment State")
+
+    payment = get_payment_session(session_id)
+    if not payment:
+        st.info("No existe todavía un registro en la Payment State Machine para esta sesión.")
         return
 
-    # =======================================================
-    # MÓDULO B — AUTO-EXPIRE
-    # =======================================================
-
-    if module["module_code"] == "B_AUTO_EXPIRE":
-        st.info("🕒 Módulo AUTO-EXPIRE — No existe flujo de contrato ni pagos.")
-        st.write("La sesión expirará automáticamente si no completa aforo.")
-        return
-
-    # =======================================================
-    # MÓDULO A — DETERMINISTA (ÚNICO con flujo contractual)
-    # =======================================================
-
-    if module["module_code"] == "A_DETERMINISTIC":
-
-        st.success("Módulo determinista — flujo contractual habilitado.")
-
-        st.markdown("### 👤 Participantes")
-        participants = get_participants_for_session(session_id)
-        st.json(participants)
-
-        st.markdown("### 📌 Estado contractual")
-        if payment:
-            st.write(f"**Payment Status:** {payment['status']}")
-            st.write(f"Total depositado: {payment.get('total_deposited_amount', 0)} €")
-            st.write(f"Adjudicatario: {payment.get('awarded_participant_id', '—')}")
-
-            st.markdown("### 📬 Datos complementarios")
-            st.json(payment)
-        else:
-            st.info("La sesión aún no ha iniciado flujo contractual.")
-
-        st.markdown("---")
-        st.subheader("ℹ Logs de contrato (desde auditoría)")
-        st.write("Consulta completa en Audit Logs.")
+    st.write(f"**Payment State:** {payment.get('state')}")
+    st.write(f"**Created at:** {payment.get('created_at')}")
+    st.write(f"**Updated at:** {payment.get('updated_at')}")
+    st.write(f"**Metadata:** {payment}")
