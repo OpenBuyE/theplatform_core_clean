@@ -1,18 +1,16 @@
 # backend_core/services/module_repository.py
 
-from typing import List, Dict, Any
-from backend_core.services.supabase_client import table
-from backend_core.services.audit_repository import log_event
+from typing import List, Optional, Dict, Any
 
+from backend_core.services.supabase_client import table
 
 MODULES_TABLE = "ca_modules"
-MODULE_SESSIONS_TABLE = "ca_module_sessions"
+SESSION_MODULES_TABLE = "ca_session_modules"
 
 
 # =======================================================
-# LIST ALL MODULES
+# LISTAR TODOS LOS MÓDULOS DEFINIDOS
 # =======================================================
-
 def list_all_modules() -> List[Dict[str, Any]]:
     resp = (
         table(MODULES_TABLE)
@@ -24,15 +22,66 @@ def list_all_modules() -> List[Dict[str, Any]]:
 
 
 # =======================================================
-# ASSIGN MODULE TO SESSION
+# OBTENER MÓDULO POR ID
 # =======================================================
+def get_module_by_id(module_id: str) -> Optional[Dict[str, Any]]:
+    resp = (
+        table(MODULES_TABLE)
+        .select("*")
+        .eq("id", module_id)
+        .single()
+        .execute()
+    )
+    return resp.data
 
-def assign_module(session_id: str, module_id: str):
-    """
-    Crea el registro session → module en ca_module_sessions.
-    """
-    _ = (
-        table(MODULE_SESSIONS_TABLE)
+
+# =======================================================
+# OBTENER MÓDULO DE UNA SESIÓN
+# =======================================================
+def get_module_for_session(session_id: str) -> Optional[Dict[str, Any]]:
+    # 1. Obtener la relación sesión-módulo
+    rel_resp = (
+        table(SESSION_MODULES_TABLE)
+        .select("*")
+        .eq("session_id", session_id)
+        .single()
+        .execute()
+    )
+
+    rel = rel_resp.data
+    if not rel:
+        return None
+
+    # 2. Cargar el módulo
+    return get_module_by_id(rel["module_id"])
+
+
+# =======================================================
+# ASIGNAR MÓDULO A UNA SESIÓN
+# =======================================================
+def assign_module_to_session(session_id: str, module_id: str) -> None:
+    # Ver si ya existe relación
+    existing = (
+        table(SESSION_MODULES_TABLE)
+        .select("*")
+        .eq("session_id", session_id)
+        .execute()
+        .data
+    )
+
+    if existing:
+        # Actualizar módulo asignado
+        (
+            table(SESSION_MODULES_TABLE)
+            .update({"module_id": module_id})
+            .eq("session_id", session_id)
+            .execute()
+        )
+        return
+
+    # Insertar nueva relación
+    (
+        table(SESSION_MODULES_TABLE)
         .insert(
             {
                 "session_id": session_id,
@@ -42,77 +91,14 @@ def assign_module(session_id: str, module_id: str):
         .execute()
     )
 
-    log_event("module_assigned", {"session_id": session_id, "module_id": module_id})
-
 
 # =======================================================
-# GET MODULE FOR SESSION
+# DESACTIVAR MÓDULO
 # =======================================================
-
-def get_module_for_session(session_id: str) -> Dict[str, Any]:
-    """
-    Devuelve el módulo asignado a una sesión.
-    """
-
-    # primero obtener el registro de asignación
-    rel = (
-        table(MODULE_SESSIONS_TABLE)
-        .select("*")
-        .eq("session_id", session_id)
-        .single()
-        .execute()
-    ).data
-
-    if not rel:
-        return None
-
-    module_id = rel["module_id"]
-
-    # ahora obtener el módulo real
-    module = (
+def deactivate_module(module_id: str) -> None:
+    (
         table(MODULES_TABLE)
-        .select("*")
+        .update({"is_active": False})
         .eq("id", module_id)
-        .single()
-        .execute()
-    ).data
-
-    return module
-
-
-# =======================================================
-# MARK MODULE AWARDED (solo módulo A)
-# =======================================================
-
-def mark_module_awarded(session_id: str):
-    """
-    Marca que el módulo ha tenido adjudicación (solo Módulo A).
-    """
-    rel = (
-        table(MODULE_SESSIONS_TABLE)
-        .select("*")
-        .eq("session_id", session_id)
-        .single()
-        .execute()
-    ).data
-
-    if not rel:
-        return
-
-    _ = (
-        table(MODULE_SESSIONS_TABLE)
-        .update({"awarded": True})
-        .eq("session_id", session_id)
         .execute()
     )
-
-    log_event("module_awarded", {"session_id": session_id})
-
-
-# =======================================================
-# LIST MODULE ASSIGNMENTS (debug)
-# =======================================================
-
-def list_session_modules() -> List[Dict[str, Any]]:
-    resp = table(MODULE_SESSIONS_TABLE).select("*").execute()
-    return resp.data or []
