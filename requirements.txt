@@ -4,3 +4,4 @@ postgrest
 gotrue
 storage3
 supafunc
+matplotlib==3.8.0
