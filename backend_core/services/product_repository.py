@@ -2,30 +2,45 @@
 
 from __future__ import annotations
 
-from typing import Optional, Dict, List
-from backend_core.services import supabase_client
+from typing import List, Optional, Dict, Any
 
+from backend_core.services.supabase_client import table
 
 PRODUCTS_TABLE = "products_v2"
 
 
-def get_product(product_id: str) -> Optional[Dict]:
+def get_product(product_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Obtiene un producto según su ID (TEXT, no UUID).
+    """
     resp = (
-        supabase_client.table(PRODUCTS_TABLE)
+        table(PRODUCTS_TABLE)
         .select("*")
         .eq("id", product_id)
         .single()
         .execute()
     )
+
+    # Si no existen datos, resp.data será None o lista vacía
+    if not resp.data:
+        return None
+
+    # resp.data es un dict (single)
     return resp.data
 
 
-def list_products(organization_id: str) -> List[Dict]:
+def list_products() -> List[Dict[str, Any]]:
+    """
+    Lista todos los productos para dropdowns.
+    """
     resp = (
-        supabase_client.table(PRODUCTS_TABLE)
+        table(PRODUCTS_TABLE)
         .select("*")
-        .eq("organization_id", organization_id)
-        .order("created_at")
+        .order("name")
         .execute()
     )
-    return resp.data or []
+
+    if not resp.data:
+        return []
+
+    return resp.data
