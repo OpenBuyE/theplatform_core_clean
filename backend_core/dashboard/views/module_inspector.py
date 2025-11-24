@@ -3,125 +3,53 @@
 import streamlit as st
 
 from backend_core.services.module_repository import (
-    list_modules,
-    assign_module_to_session,
+    list_all_modules,
+    assign_module,
 )
-from backend_core.services.supabase_client import table
-from backend_core.services.module_repository import get_module
-from backend_core.services.audit_repository import log_event
-
-
-SESSIONS_TABLE = "ca_sessions"
+from backend_core.services.session_repository import get_session_by_id
+from backend_core.services.product_repository import get_product
 
 
 # =======================================================
-#   MODULE INSPECTOR – PANEL PROFESIONAL
+# MODULE INSPECTOR VIEW
 # =======================================================
 
 def render_module_inspector():
+    st.header("Module Inspector")
 
-    st.header("🧩 Module Inspector")
-    st.write("Vista avanzada para gestionar módulos del sistema.")
-
-    st.markdown("---")
-
-    # =======================================================
-    # LISTAR MÓDULOS
-    # =======================================================
-
-    st.subheader("📚 Módulos registrados")
-
-    modules = list_modules()
-
-    for m in modules:
-        with st.expander(f"{m['module_code']} — {m['name']}"):
-            st.write(f"**Código:** {m['module_code']}")
-            st.write(f"**Nombre:** {m['name']}")
-            st.write(f"**Descripción:** {m.get('description', '—')}")
-            st.write(f"**Activo:** {'Sí' if m.get('active') else 'No'}")
-            st.write("---")
-
-            # Ver sesiones asociadas a este módulo
-            st.write("### Sesiones con este módulo")
-
-            resp = (
-                table(SESSIONS_TABLE)
-                .select("*")
-                .eq("module_code", m["module_code"])
-                .order("created_at", desc=True)
-                .execute()
-            )
-            sessions = resp.data or []
-
-            if not sessions:
-                st.info("No hay sesiones con este módulo.")
-            else:
-                for s in sessions[:10]:
-                    st.write(f"- Sesión: {s['id']} — Estado: **{s['status']}**")
-
-    st.markdown("---")
-
-    # =======================================================
-    # CAMBIO DE MÓDULO PARA SESIONES EXISTENTES
-    # =======================================================
-
-    st.subheader("🛠 Cambiar módulo de una sesión")
-
-    session_id = st.text_input("Session ID a modificar:")
-
-    if session_id:
-        st.write("Seleccionar nuevo módulo:")
-
-        module_labels = {f"{m['module_code']} — {m['name']}": m["module_code"] for m in modules}
-
-        selected_label = st.selectbox(
-            "Módulo:",
-            options=list(module_labels.keys()),
-        )
-
-        new_code = module_labels[selected_label]
-
-        if st.button("Aplicar cambio de módulo"):
-            try:
-                assign_module_to_session(session_id, new_code)
-
-                log_event(
-                    "module_changed_manual",
-                    session_id=session_id,
-                    user_id=None,
-                    metadata={"new_module": new_code},
-                )
-
-                st.success(f"Módulo cambiado correctamente a: {new_code}")
-            except Exception as e:
-                st.error(f"Error cambiando módulo: {e}")
-
-    st.markdown("---")
-
-    # =======================================================
-    # BUSCAR SESIONES POR MÓDULO
-    # =======================================================
-
-    st.subheader("🔍 Buscar sesiones por módulo")
-
-    search_label = st.selectbox(
-        "Selecciona módulo a buscar:",
-        options=[m["module_code"] for m in modules],
+    st.write(
+        "Esta herramienta permite ver los módulos disponibles "
+        "y asignar manualmente un módulo a una sesión."
     )
 
-    if st.button("Buscar"):
-        resp = (
-            table(SESSIONS_TABLE)
-            .select("*")
-            .eq("module_code", search_label)
-            .order("created_at", desc=True)
-            .execute()
-        )
-        sessions = resp.data or []
+    st.subheader("Listado de módulos registrados")
+    modules = list_all_modules()
 
-        st.write(f"### Resultados ({len(sessions)})")
+    if not modules:
+        st.warning("No hay módulos registrados.")
+    else:
+        for m in modules:
+            st.write("----")
+            st.write(f"**ID:** {m['id']}")
+            st.write(f"**Código:** {m['module_code']}")
+            st.write(f"**Nombre:** {m['name']}")
+            st.write(f"**Descripción:** {m['description']}")
+            st.write(f"**Activo:** {m['is_active']}")
 
-        for s in sessions[:25]:
-            st.write(
-                f"- **{s['id']}** — estado: {s['status']} — product_id: {s['product_id']}"
+    st.write("----")
+    st.subheader("Asignar módulo a una sesión")
+
+    session_id = st.text_input("Session ID")
+
+    module_codes = {m["module_code"]: m["id"] for m in modules}
+    if module_codes:
+        selected_module_code = st.selectbox("Módulo", list(module_codes.keys()))
+        selected_module_id = module_codes[selected_module_code]
+
+        if st.button("Asignar módulo"):
+            assign_module(session_id, selected_module_id)
+            st.success(
+                f"Módulo '{selected_module_code}' asignado a la sesión {session_id}."
             )
+    else:
+        st.info("No hay módulos activos para asignar.")
