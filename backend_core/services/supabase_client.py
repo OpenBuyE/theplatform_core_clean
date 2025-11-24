@@ -16,6 +16,7 @@ class QueryBuilder:
         self.filters = []
         self.order_field = None
         self._single = False
+        self._limit = None
         self.columns = "*"
 
     # ----------------------
@@ -30,11 +31,6 @@ class QueryBuilder:
 
     # ----------------------
     def in_(self, field, values):
-        """
-        Filtro IN para campos de texto, por ejemplo:
-        .in_("status", ["finished", "expired"])
-        -> status=in.("finished","expired")
-        """
         quoted = ",".join([f'"{v}"' for v in values])
         self.filters.append(f"{field}=in.({quoted})")
         return self
@@ -50,15 +46,27 @@ class QueryBuilder:
         return self
 
     # ----------------------
+    def limit(self, n: int):
+        self._limit = n
+        return self
+
+    # ----------------------
     def _build_url(self):
         url = f"{SUPABASE_URL}/rest/v1/{self.table_name}?select={self.columns}"
+
         for f in self.filters:
             url += f"&{f}"
+
         if self.order_field:
             field, desc = self.order_field
             url += f"&order={field}.{'desc' if desc else 'asc'}"
+
+        if self._limit:
+            url += f"&limit={self._limit}"
+
         if self._single:
             url += "&limit=1"
+
         return url
 
     # ----------------------
@@ -90,5 +98,4 @@ def table(name: str) -> QueryBuilder:
     return QueryBuilder(name)
 
 
-# Alias para compatibilidad con repositorios que usan supabase_client.table(...)
 supabase = type("SupabaseWrapper", (), {"table": table})
