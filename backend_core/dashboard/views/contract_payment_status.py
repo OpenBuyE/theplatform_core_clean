@@ -1,127 +1,101 @@
 # backend_core/dashboard/views/contract_payment_status.py
 
 import streamlit as st
-import requests
 
+from backend_core.services.contract_engine import contract_engine
+from backend_core.services.session_repository import get_session_by_id
+from backend_core.services.participant_repository import get_participants_for_session
 from backend_core.services.product_repository import get_product
+from backend_core.services.module_repository import get_session_module
 
-API_BASE = "http://localhost:8000"   # AJUSTA si usas otro host/puerto
 
+# =======================================================
+# CONTRACT & PAYMENT STATUS – MÓDULO AWARE
+# =======================================================
 
 def render_contract_payment_status():
-    st.title("📄 Contract & Payment Status")
-    st.write("Vista completa del estado contractual y del flujo de pagos para una sesión.")
 
-    session_id = st.text_input("Session ID", placeholder="uuid-session")
+    st.header("📄 Contract & Payment Status")
+
+    session_id = st.text_input("Session ID:", placeholder="UUID de la sesión")
 
     if not session_id:
-        st.info("Introduce un Session ID para ver el estado contractual.")
+        st.info("Introduce un Session ID.")
         return
 
-    # ----------------------------------------------------
-    # CONSULTAR CONTRATO
-    # ----------------------------------------------------
-    if st.button("🔍 Consultar Estado Contractual"):
-        with st.spinner("Consultando contrato + pagos..."):
-            try:
-                url = f"{API_BASE}/internal/contract/{session_id}"
-                resp = requests.get(url, timeout=10)
+    st.markdown("---")
 
-                if resp.status_code != 200:
-                    st.error(f"Error {resp.status_code}: {resp.text}")
-                    return
+    # =======================================================
+    # Obtener estado contractual completo
+    # =======================================================
 
-                data = resp.json()["data"]
+    data = contract_engine.get_contract_status(session_id)
 
-            except Exception as e:
-                st.error(f"Error al conectar con la API: {e}")
-                return
+    if not data:
+        st.error("Sesión no encontrada.")
+        return
 
-        contract = data["contract"]
-        payment = data["payment_session"]
-        session_raw = data["session"]
+    session = data["session"]
+    module = data["module"]
+    payment = data["payment"]
 
-        # ----------------------------------------------------
-        # PRODUCTO asociado
-        # ----------------------------------------------------
-        st.subheader("🛒 Producto asociado")
-        product = get_product(session_raw["product_id"])
+    st.subheader(f"Sesión {session['id']}")
+    st.write(f"**Estado:** {session['status']}")
+    st.write(f"**Módulo:** {module['module_code']} — {module['name']}")
 
-        if product:
-            st.write(f"**{product['name']}** — {product['price_final']} €")
-            if product.get("sku"):
-                st.write(f"SKU: {product['sku']}")
-            if product.get("description"):
-                st.write(product["description"])
-            if product.get("image_url"):
-                st.image(product["image_url"], width=240)
-        else:
-            st.warning("Producto no encontrado en products_v2.")
+    # =======================================================
+    # Mostrar información del producto
+    # =======================================================
 
-        # ----------------------------------------------------
-        # SESIÓN BRUTA
-        # ----------------------------------------------------
-        st.subheader("📌 Información de la Sesión")
-        st.json(session_raw)
+    product = get_product(session["product_id"])
+    if product:
+        st.write(f"📦 Producto: **{product['name']}** — {product['price']} €")
+        if product.get("image_url"):
+            st.image(product["image_url"], width=200)
 
-        # ----------------------------------------------------
-        # CONTRACT SESSION
-        # ----------------------------------------------------
-        st.subheader("📑 Estado Contractual")
-        if contract:
-            st.json(contract)
-        else:
-            st.warning("No existe ContractSession para esta sesión.")
+    st.markdown("---")
 
-        # ----------------------------------------------------
-        # PAYMENT SESSION
-        # ----------------------------------------------------
-        st.subheader("💳 Estado de Pagos")
+    # =======================================================
+    # MÓDULO C — PRELAUNCH
+    # =======================================================
+
+    if module["module_code"] == "C_PRELAUNCH":
+        st.warning("🔒 Módulo PRELAUNCH — No existe flujo de contrato ni pagos.")
+        st.info("Esta sesión es únicamente informativa y no admite participantes.")
+        return
+
+    # =======================================================
+    # MÓDULO B — AUTO-EXPIRE
+    # =======================================================
+
+    if module["module_code"] == "B_AUTO_EXPIRE":
+        st.info("🕒 Módulo AUTO-EXPIRE — No existe flujo de contrato ni pagos.")
+        st.write("La sesión expirará automáticamente si no completa aforo.")
+        return
+
+    # =======================================================
+    # MÓDULO A — DETERMINISTA (ÚNICO con flujo contractual)
+    # =======================================================
+
+    if module["module_code"] == "A_DETERMINISTIC":
+
+        st.success("Módulo determinista — flujo contractual habilitado.")
+
+        st.markdown("### 👤 Participantes")
+        participants = get_participants_for_session(session_id)
+        st.json(participants)
+
+        st.markdown("### 📌 Estado contractual")
         if payment:
+            st.write(f"**Payment Status:** {payment['status']}")
+            st.write(f"Total depositado: {payment.get('total_deposited_amount', 0)} €")
+            st.write(f"Adjudicatario: {payment.get('awarded_participant_id', '—')}")
+
+            st.markdown("### 📬 Datos complementarios")
             st.json(payment)
         else:
-            st.warning("No existe PaymentSession para esta sesión.")
+            st.info("La sesión aún no ha iniciado flujo contractual.")
 
-        # ----------------------------------------------------
-        # ACCIONES INTERNAS
-        # ----------------------------------------------------
-        st.divider()
-        st.subheader("⚙️ Acciones Internas (Admin/Test)")
-
-        # Request Settlement
-        if st.button("Solicitar Settlement"):
-            try:
-                r = requests.post(
-                    f"{API_BASE}/internal/contract/{session_id}/request-settlement",
-                    json={"operator_user_id": "streamlit_admin"},
-                )
-                st.success(r.json())
-            except Exception as e:
-                st.error(e)
-
-        # Confirm Delivery
-        if st.button("Confirmar Entrega"):
-            try:
-                r = requests.post(
-                    f"{API_BASE}/internal/contract/{session_id}/confirm-delivery",
-                    json={
-                        "adjudicatario_user_id": "streamlit_admin",
-                        "delivery_method": "store_pickup",
-                        "delivery_location": "Madrid Centro",
-                        "delivery_metadata": {"note": "Confirmado desde panel"},
-                    },
-                )
-                st.success(r.json())
-            except Exception as e:
-                st.error(e)
-
-        # Close Contract
-        if st.button("Cerrar Contrato"):
-            try:
-                r = requests.post(
-                    f"{API_BASE}/internal/contract/{session_id}/close-contract",
-                    json={"operator_user_id": "streamlit_admin"},
-                )
-                st.success(r.json())
-            except Exception as e:
-                st.error(e)
+        st.markdown("---")
+        st.subheader("ℹ Logs de contrato (desde auditoría)")
+        st.write("Consulta completa en Audit Logs.")
