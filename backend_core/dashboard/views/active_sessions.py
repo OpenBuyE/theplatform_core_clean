@@ -1,23 +1,27 @@
 # backend_core/dashboard/views/active_sessions.py
 
 import streamlit as st
-import requests
+from datetime import datetime
 
 from backend_core.services.session_repository import (
     get_active_sessions,
-    get_participants,
 )
+from backend_core.services.participant_repository import (
+    add_test_participant,
+    get_participants_for_session,
+)
+from backend_core.services.adjudicator_engine import adjudicator_engine
 from backend_core.services.product_repository import get_product
-from backend_core.services.audit_repository import AuditRepository
+from backend_core.services.module_repository import get_session_module
 
-API_BASE = "http://localhost:8000"   # Ajusta si usas otro host/puerto
 
-audit = AuditRepository()
-
+# =======================================================
+# ACTIVE SESSIONS — VISTA PROFESIONAL
+# =======================================================
 
 def render_active_sessions():
-    st.title("Active Sessions")
-    st.write("Gestión de sesiones activas, participantes y adjudicación.")
+
+    st.header("🔥 Active Sessions")
 
     sessions = get_active_sessions()
 
@@ -26,72 +30,91 @@ def render_active_sessions():
         return
 
     for s in sessions:
-        st.subheader(f"🟢 Sesión Activa: {s['id']}")
-        st.write(f"Capacity: {s['capacity']} — Pax: {s['pax_registered']}")
 
-        # ----------------------------------------------------
-        # PRODUCTO
-        # ----------------------------------------------------
+        st.markdown("---")
+        st.subheader(f"Sesión {s['id']}")
+
+        # ================================================
+        # MÓDULO ASIGNADO
+        # ================================================
+        module = get_session_module(s)
+        st.write(f"**Módulo:** {module['module_code']} — {module['name']}")
+
+        # ================================================
+        # MOSTRAR PRODUCTO
+        # ================================================
         product = get_product(s["product_id"])
-        st.write("### 🛒 Producto asociado")
         if product:
-            st.write(f"**{product['name']}** — {product['price_final']} €")
-            if product.get("sku"):
-                st.write(f"SKU: {product['sku']}")
+            st.write(f"📦 Producto: **{product['name']}** — {product['price']} €")
             if product.get("image_url"):
-                st.image(product["image_url"], width=220)
-        else:
-            st.warning("Producto no encontrado en products_v2")
+                st.image(product["image_url"], width=200)
 
-        st.write("---")
+        st.write(f"Organization: {s['organization_id']}")
+        st.write(f"Status: {s['status']}")
 
-        # ----------------------------------------------------
-        # PARTICIPANTES
-        # ----------------------------------------------------
-        st.write("### 👥 Participantes")
-        participants = get_participants(s["id"])
+        # ================================================
+        # MÓDULO C — PRELAUNCH
+        # ================================================
+        if module["module_code"] == "C_PRELAUNCH":
+            st.warning("🔒 Este módulo NO permite participantes ni activación.")
+            st.write("Modo pre-lanzamiento / anuncio.")
+            continue
 
-        if participants:
+        # ================================================
+        # MÓDULO B — AUTO-EXPIRE
+        # ================================================
+        if module["module_code"] == "B_AUTO_EXPIRE":
+            st.info("Este módulo expira automáticamente. No tiene adjudicación ni pagos.")
+
+            expires_at = s.get("expires_at")
+            if expires_at:
+                now = datetime.utcnow()
+                remaining = (expires_at - now).total_seconds()
+                st.write(f"⏳ Expira en: **{int(remaining/60)} min**")
+
+            # Mostrar participantes pero no adjudicación
+            participants = get_participants_for_session(s["id"])
+            st.write(f"Pax registrados: {len(participants)}/{s['capacity']}")
+
+            st.write("Participantes:")
             st.json(participants)
-        else:
-            st.info("Sin participantes todavía.")
 
-        # ----------------------------------------------------
-        # Añadir participante test
-        # ----------------------------------------------------
-        if st.button(f"Añadir participante test a {s['id']}", key=f"add_pax_{s['id']}"):
-            try:
-                resp = requests.post(
-                    f"{API_BASE}/internal/debug/add-test-participant",
-                    json={"session_id": s["id"]},
-                    timeout=8,
-                )
-                st.success(resp.json())
-                audit.log(
-                    action="TEST_PARTICIPANT_ADDED",
+            continue  # NO adjudicación ni añadir participante de test
+
+        # ================================================
+        # MÓDULO A — DETERMINISTA
+        # ================================================
+        if module["module_code"] == "A_DETERMINISTIC":
+
+            st.success("Módulo determinista activo.")
+
+            # Mostramos aforo
+            pax = s["pax_registered"]
+            st.write(f"Aforo: {pax}/{s['capacity']}")
+
+            # Participantes
+            participants = get_participants_for_session(s["id"])
+            st.write("Participantes:")
+            st.json(participants)
+
+            # ---------------------------------------------
+            # Botón: Añadir participante test
+            # ---------------------------------------------
+            if st.button(f"Añadir participante test — Sesión {s['id']}"):
+                add_test_participant(
                     session_id=s["id"],
+                    user_id="test-user",
+                    amount=product["price"] / s["capacity"],
+                    price=product["price"],
+                    quantity=1,
                 )
-                st.experimental_rerun()
-            except Exception as e:
-                st.error(f"Error: {e}")
+                st.success("Participante de test añadido.")
 
-        # ----------------------------------------------------
-        # Forzar adjudicación
-        # ----------------------------------------------------
-        if st.button(f"Forzar adjudicación {s['id']}", key=f"award_{s['id']}"):
-            try:
-                resp = requests.post(
-                    f"{API_BASE}/internal/debug/force-award",
-                    json={"session_id": s["id"]},
-                    timeout=12,
-                )
-                st.success(resp.json())
-                audit.log(
-                    action="SESSION_FORCED_AWARD",
-                    session_id=s["id"],
-                )
-                st.experimental_rerun()
-            except Exception as e:
-                st.error(f"Error: {e}")
+            # ---------------------------------------------
+            # Botón: Forzar adjudicación
+            # ---------------------------------------------
+            if st.button(f"FORZAR ADJUDICACIÓN — {s['id']}"):
+                adjudicator_engine.execute_adjudication(s["id"])
+                st.success("Adjudicación ejecutada.")
 
-        st.divider()
+            continue
