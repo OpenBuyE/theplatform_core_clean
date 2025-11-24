@@ -1,46 +1,33 @@
 # backend_core/services/product_repository.py
 
-from __future__ import annotations
-
-from typing import List, Optional, Dict, Any
+from typing import List, Dict, Optional
 
 from backend_core.services.supabase_client import table
 
 PRODUCTS_TABLE = "products_v2"
 
 
-def get_product(product_id: str) -> Optional[Dict[str, Any]]:
+def list_products(only_active: bool = True) -> List[Dict]:
+    q = table(PRODUCTS_TABLE).select("*")
+    if only_active:
+        q = q.eq("active", True)
+    resp = q.execute()
+    return resp.data or []
+
+
+def get_product(product_id: str) -> Optional[Dict]:
     """
-    Obtiene un producto según su ID (TEXT, no UUID).
+    Obtiene un producto por su id (text).
     """
+    if not product_id:
+        return None
     resp = (
         table(PRODUCTS_TABLE)
         .select("*")
         .eq("id", product_id)
-        .single()
         .execute()
     )
-
-    # Si no existen datos, resp.data será None o lista vacía
-    if not resp.data:
-        return None
-
-    # resp.data es un dict (single)
-    return resp.data
-
-
-def list_products() -> List[Dict[str, Any]]:
-    """
-    Lista todos los productos para dropdowns.
-    """
-    resp = (
-        table(PRODUCTS_TABLE)
-        .select("*")
-        .order("name")
-        .execute()
-    )
-
-    if not resp.data:
-        return []
-
-    return resp.data
+    data = resp.data or []
+    if isinstance(data, list):
+        return data[0] if data else None
+    return data
