@@ -7,115 +7,117 @@ from datetime import datetime
 
 from backend_core.services.audit_repository import log_event
 from backend_core.services.session_repository import get_session_by_id
-from backend_core.services.module_repository import get_session_module
+from backend_core.services.module_repository import (
+    get_module_for_session,
+    mark_module_awarded,
+)
 from backend_core.services.payment_state_machine import (
     init_payment_session,
-    get_payment_session,
     update_payment_state,
+    get_payment_session,
 )
+from backend_core.services.wallet_orchestrator import wallet_orchestrator
 
 
 class ContractEngine:
-    """
-    Motor contractual OFF-CHAIN.
-    Este archivo NO debe importar wallet_orchestrator arriba
-    para evitar import circular.
-    """
 
     # ============================================================
-    # 1) Inicio de contrato
+    # START CONTRACTUAL WORKFLOW
     # ============================================================
 
-    def start_contract(self, session_id: str) -> Dict[str, Any]:
+    def start_contract_flow(self, session_id: str):
+        """Se llama después de adjudicar una sesión determinista."""
 
         session = get_session_by_id(session_id)
         if not session:
-            raise ValueError("Session not found")
+            raise ValueError(f"No session found: {session_id}")
 
-        module = get_session_module(session)
-
-        if module["module_code"] != "A_DETERMINISTIC":
-            return {"ok": False, "reason": "module does not support contracts"}
-
-        # Obtener adjudicatario
-        from backend_core.services.participant_repository import get_participants_for_session
-        participants = get_participants_for_session(session_id)
-
-        winner = next((p for p in participants if p["is_awarded"]), None)
-        if not winner:
-            raise RuntimeError("No awarded participant found")
-
-        # Crear payment_session
-        init_payment_session(session_id, winner["id"])
+        module = get_module_for_session(session_id)
 
         log_event(
-            "contract_started",
+            "contract_flow_started",
             session_id=session_id,
-            metadata={"winner_id": winner["id"]},
+            metadata={
+                "module_id": module["id"] if module else None,
+            },
         )
 
-        return {"ok": True, "session_id": session_id, "winner": winner}
+        # Iniciar payment session
+        init_payment_session(session_id)
 
     # ============================================================
-    # 2) Depósitos completados
+    # CONFIRM DELIVERY
     # ============================================================
 
-    def on_participant_funded(self, session_id: str):
-        """Llamado por wallet_orchestrator"""
+    def confirm_delivery(self, session_id: str):
+        """El adjudicatario confirma que recibió el producto en tienda."""
+
+        update_payment_state(session_id, "DELIVERED")
+
+        log_event(
+            "delivery_confirmed",
+            session_id=session_id,
+        )
+
+    # ============================================================
+    # CLOSE CONTRACT
+    # ============================================================
+
+    def close_contract(self, session_id: str):
+        """Cerramos por completo el contrato."""
+
+        now = datetime.utcnow().isoformat()
+
+        # Marcar módulo como finalizado con adjudicación
+        module = get_module_for_session(session_id)
+        if module:
+            mark_module_awarded(module["id"])
+
+        update_payment_state(session_id, "CLOSED")
+
+        log_event(
+            "contract_closed",
+            session_id=session_id,
+            metadata={"closed_at": now},
+        )
+
+    # ============================================================
+    # WEBHOOKS DESDE FINTECH
+    # ============================================================
+
+    def handle_deposit_ok(self, payload: Dict[str, Any]):
+        session_id = payload["session_id"]
 
         update_payment_state(session_id, "DEPOSITS_OK")
 
         log_event(
-            "contract_funded",
+            "deposit_ok_received",
             session_id=session_id,
         )
 
-    # ============================================================
-    # 3) Settlement completado
-    # ============================================================
-
-    def on_settlement_completed(self, session_id: str):
-        """Llamado por wallet_orchestrator"""
+    def handle_settlement(self, payload: Dict[str, Any]):
+        session_id = payload["session_id"]
 
         update_payment_state(session_id, "SETTLED")
 
         log_event(
-            "contract_settlement_completed",
+            "settlement_completed",
             session_id=session_id,
         )
 
-    # ============================================================
-    # 4) Reembolso por fuerza mayor
-    # ============================================================
-
-    def on_force_majeure_refund(self, session_id: str):
-        """Llamado por wallet_orchestrator"""
+    def handle_force_majeure(self, payload: Dict[str, Any]):
+        session_id = payload["session_id"]
 
         update_payment_state(session_id, "FORCE_MAJEURE")
 
         log_event(
-            "contract_force_majeure",
+            "force_majeure_refund",
             session_id=session_id,
         )
 
-    # ============================================================
-    # 5) Estado completo del contrato
-    # ============================================================
 
-    def get_contract_status(self, session_id: str) -> Optional[Dict[str, Any]]:
-        session = get_session_by_id(session_id)
-        if not session:
-            return None
+# ============================================================
+# SINGLETON
+# ============================================================
 
-        module = get_session_module(session)
-        payment = get_payment_session(session_id)
-
-        return {
-            "session": session,
-            "module": module,
-            "payment": payment,
-        }
-
-
-# Instancia global
 contract_engine = ContractEngine()
