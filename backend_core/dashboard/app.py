@@ -55,7 +55,7 @@ def main():
             "Admin Operators / KYC",
             "Contract & Payment Status",
             "Operator Dashboard",
-            "Module Inspector",          # 👈 NUEVO
+            "Module Inspector",
         ],
     )
 
@@ -76,4 +76,28 @@ def main():
     elif page == "Audit Logs":
         render_audit_logs()
 
-    elif page == "Admin Engin
+    elif page == "Admin Engine":
+        render_admin_engine()
+
+    elif page == "Admin Seeds":
+        render_admin_seeds()
+
+    elif page == "Admin Operators / KYC":
+        render_admin_operators_kyc()
+
+    elif page == "Contract & Payment Status":
+        render_contract_payment_status()
+
+    elif page == "Operator Dashboard":
+        render_operator_dashboard()
+
+    elif page == "Module Inspector":
+        render_module_inspector()
+
+
+# =======================================================
+# ENTRY POINT
+# =======================================================
+
+if __name__ == "__main__":
+    main()
