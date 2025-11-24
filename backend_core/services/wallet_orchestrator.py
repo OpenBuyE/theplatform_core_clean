@@ -6,89 +6,48 @@ from typing import Dict, Any
 
 from backend_core.services.audit_repository import log_event
 from backend_core.services.payment_state_machine import (
-    get_payment_session,
     update_payment_state,
-    mark_settlement,
-    mark_force_majeure_refund,
 )
-from backend_core.services.contract_engine import contract_engine
 
 
 class WalletOrchestrator:
     """
-    Orquestador de eventos provenientes de MangoPay (webhooks simulados).
-    Este componente decide cómo modificar el estado de payment_session
-    y cuándo avanzar el flujo contractual.
+    Orquesta eventos de MangoPay.
+    Importamos contract_engine SOLO dentro de funciones para evitar import circular.
     """
 
-    # ============================================================
-    # 1) DEPÓSITO OK (todos los compradores completan pago)
-    # ============================================================
+    def handle_deposit_ok(self, session_id: str, payload: Dict[str, Any]):
+        from backend_core.services.contract_engine import contract_engine
 
-    def handle_deposit_ok(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Evento que indica que MangoPay confirma los depósitos
-        de todos los participantes.
-        """
+        update_payment_state(session_id, "DEPOSITS_OK")
 
-        # Actualizamos estado
-        updated = update_payment_state(session_id, "DEPOSITS_OK")
+        log_event("wallet_deposit_ok", session_id=session_id, metadata=payload)
 
-        log_event(
-            "wallet_deposit_ok",
-            session_id=session_id,
-            metadata={"payload": payload, "new_status": "DEPOSITS_OK"},
-        )
-
-        # Avisar al motor contractual
         contract_engine.on_participant_funded(session_id)
 
-        return {"ok": True, "payment": updated}
+        return {"ok": True}
 
-    # ============================================================
-    # 2) EJECUCIÓN DE LIQUIDACIÓN (pago al proveedor)
-    # ============================================================
+    def handle_settlement_executed(self, session_id: str, payload: Dict[str, Any]):
+        from backend_core.services.contract_engine import contract_engine
 
-    def handle_settlement_executed(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Evento que indica que MangoPay ha ejecutado la transferencia
-        al proveedor.
-        """
+        update_payment_state(session_id, "SETTLED")
 
-        updated = mark_settlement(session_id)
-
-        log_event(
-            "wallet_settlement_executed",
-            session_id=session_id,
-            metadata={"payload": payload, "new_status": "SETTLED"},
-        )
+        log_event("wallet_settlement_executed", session_id=session_id, metadata=payload)
 
         contract_engine.on_settlement_completed(session_id)
 
-        return {"ok": True, "payment": updated}
+        return {"ok": True}
 
-    # ============================================================
-    # 3) REEMBOLSO POR FUERZA MAYOR
-    # ============================================================
+    def handle_force_majeure_refund(self, session_id: str, payload: Dict[str, Any]):
+        from backend_core.services.contract_engine import contract_engine
 
-    def handle_force_majeure_refund(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Evento emitido cuando MangoPay reembolsa solo el precio del producto
-        en caso de fuerza mayor.
-        """
+        update_payment_state(session_id, "FORCE_MAJEURE")
 
-        updated = mark_force_majeure_refund(session_id)
-
-        log_event(
-            "wallet_force_majeure_refund",
-            session_id=session_id,
-            metadata={"payload": payload, "new_status": "FORCE_MAJEURE"},
-        )
+        log_event("wallet_force_majeure_refund", session_id=session_id, metadata=payload)
 
         contract_engine.on_force_majeure_refund(session_id)
 
-        return {"ok": True, "payment": updated}
+        return {"ok": True}
 
 
-# Instancia global
 wallet_orchestrator = WalletOrchestrator()
