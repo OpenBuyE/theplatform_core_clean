@@ -3,260 +3,177 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
-from typing import Optional
+from typing import Any, Dict
 
-# ======================================
-# Repositories & Services
-# ======================================
-
-# Session / Participants
-from backend_core.services.session_repository import (
-    get_session_by_id,
+from backend_core.services.contract_engine import contract_engine
+from backend_core.services.module_repository import (
+    list_modules,
+    get_module,
+    assign_module_to_session,
 )
-from backend_core.services.participant_repository import (
-    create_test_participant,
-)
-from backend_core.services.adjudicator_engine import adjudicator_engine
-from backend_core.services.session_engine import session_engine
+from backend_core.services.audit_repository import log_event
 
-# Contract
-from backend_core.services.contract_engine import (
-    on_settlement_requested,
-    on_delivery_confirmed,
-    on_contract_close,
-)
-
-# MangoPay / Operators
-from backend_core.services.operator_repository import (
-    get_operator_by_id,
-    update_operator_mangopay_ids,
-    update_operator_kyc_status,
-    log_operator_kyc_event,
-)
-from backend_core.services.mangopay_client import (
-    create_legal_user,
-    create_wallet_for_operator,
-    create_kyc_document,
-    upload_kyc_document_page,
-    submit_kyc_document,
-    get_kyc_document,
-    get_legal_user,
-)
-from backend_core.models.operator import OperatorKycStatus
-
-
-router = APIRouter()
+router = APIRouter(prefix="/internal", tags=["internal"])
 
 
 # ============================================================
-# INTERNAL DEBUG — FOR TESTING PURPOSES ONLY
+# 1) ESTADO CONTRACTUAL (USADO POR DASHBOARD / OPERATOR VIEW)
 # ============================================================
 
-@router.post("/internal/debug/add-test-participant")
-def debug_add_test_participant(session_id: str):
+@router.get("/contract/{session_id}")
+def get_contract_status(session_id: str) -> Dict[str, Any]:
     """
-    Añade un participante ficticio a una sesión activa (solo debug).
+    Devuelve el estado contractual completo de una sesión.
+    Se adapta al formato que usan las vistas de Streamlit:
+    {
+      "data": {
+        "session": {...},
+        "contract": {...},        # aquí devolvemos el módulo como "contract"
+        "payment_session": {...}
+      }
+    }
     """
-    session = get_session_by_id(session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
-
-    p = create_test_participant(session_id)
-    return {"ok": True, "participant": p}
-
-
-@router.post("/internal/debug/force-award")
-def debug_force_award(session_id: str):
-    """
-    Fuerza adjudicación (solo debug).
-    """
-    result = adjudicator_engine.force_award(session_id)
-    return {"ok": True, "result": result}
-
-
-# ============================================================
-# INTERNAL CONTRACT API
-# ============================================================
-
-@router.get("/internal/contract/{session_id}")
-def get_contract_inspection(session_id: str):
-    """
-    Vista interna del estado contractual + pagos para una sesión.
-    """
-    result = adjudicator_engine.inspect_contract_state(session_id)
-    if not result:
-        raise HTTPException(404, "Contract or session not found")
-    return {"ok": True, "data": result}
-
-
-@router.post("/internal/contract/{session_id}/request-settlement")
-def contract_request_settlement(session_id: str, operator_user_id: Optional[str] = None):
-    """
-    Solicita settlement al contract engine.
-    """
-    on_settlement_requested(session_id, operator_user_id)
-    return {"ok": True, "session_id": session_id}
-
-
-@router.post("/internal/contract/{session_id}/confirm-delivery")
-def contract_confirm_delivery(
-    session_id: str,
-    adjudicatario_user_id: str,
-    delivery_method: Optional[str] = None,
-    delivery_location: Optional[str] = None,
-    delivery_metadata: Optional[dict] = None,
-):
-    """
-    Confirma la entrega del producto por parte del adjudicatario.
-    """
-    on_delivery_confirmed(
-        session_id=session_id,
-        adjudicatario_user_id=adjudicatario_user_id,
-        delivery_method=delivery_method,
-        delivery_location=delivery_location,
-        delivery_metadata=delivery_metadata,
-    )
-    return {"ok": True, "session_id": session_id}
-
-
-@router.post("/internal/contract/{session_id}/close-contract")
-def contract_close(session_id: str, operator_user_id: Optional[str] = None):
-    """
-    Cierra un contrato ya entregado / pagado / reembolsado.
-    """
-    on_contract_close(session_id, operator_user_id)
-    return {"ok": True, "session_id": session_id}
-
-
-# ============================================================
-# INTERNAL OPERATOR ONBOARDING (MangoPay KYC/KYB)
-# ============================================================
-
-@router.post("/internal/operators/{operator_id}/create-mangopay-account")
-def create_mangopay_account(operator_id: str):
-    """
-    Crea el usuario legal + wallet del operador en MangoPay.
-    """
-    operator = get_operator_by_id(operator_id)
-    if not operator:
-        raise HTTPException(404, "Operator not found")
-
-    # Valores de ejemplo; en producción, vendrán del panel
-    legal_user = create_legal_user(
-        name=operator.name,
-        legal_person_type=operator.legal_person_type or "BUSINESS",
-        email="operator@example.com",
-        headquarters_address={
-            "AddressLine1": "Calle Falsa 123",
-            "City": "Madrid",
-            "Country": "ES",
-            "PostalCode": "28001"
-        },
-        legal_representative={
-            "first_name": "John",
-            "last_name": "Doe",
-            "email": "legal@example.com",
-            "birthday": 631152000,  # 1990-01-01
-            "nationality": "ES",
-            "residence": "ES"
-        },
-        country=operator.country or "ES",
-    )
-
-    wallet = create_wallet_for_operator(legal_user["Id"])
-
-    update_operator_mangopay_ids(
-        operator_id,
-        mangopay_legal_user_id=legal_user["Id"],
-        mangopay_wallet_id=wallet["Id"],
-    )
-
-    log_operator_kyc_event(
-        operator_id,
-        "MANGOPAY_ACCOUNT_CREATED",
-        mangopay_kyc_id=None,
-        status="created",
-        payload={"legal_user": legal_user, "wallet": wallet},
-    )
+    data = contract_engine.get_contract_status(session_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Session not found")
 
     return {
-        "ok": True,
-        "legal_user": legal_user,
-        "wallet": wallet,
+        "data": {
+            "session": data["session"],
+            "contract": data["module"],           # compatibilidad con UI antigua
+            "payment_session": data["payment"],
+        }
     }
 
 
-@router.post("/internal/operators/{operator_id}/upload-kyc-document")
-def upload_kyc_document_api(operator_id: str, doc_type: str = "IDENTITY_PROOF"):
+# (Opcional / stubs actuales: confirmar entrega, cierre de contrato)
+@router.post("/contract/{session_id}/confirm-delivery")
+def confirm_delivery(session_id: str) -> Dict[str, Any]:
     """
-    Crea + sube documento KYC a MangoPay para un operador.
-    En producción, el panel enviará el archivo real.
+    Endpoint stub para confirmar entrega.
+    De momento solo registra en auditoría.
     """
-    operator = get_operator_by_id(operator_id)
-    if not operator:
-        raise HTTPException(404, "Operator not found")
+    log_event("contract_confirm_delivery", session_id=session_id, user_id=None, metadata={})
+    return {"ok": True, "session_id": session_id, "action": "confirm_delivery"}
 
-    if not operator.mangopay_legal_user_id:
-        raise HTTPException(400, "Operator has no MangoPay legal user")
 
-    doc = create_kyc_document(operator.mangopay_legal_user_id, doc_type)
+@router.post("/contract/{session_id}/close-contract")
+def close_contract(session_id: str) -> Dict[str, Any]:
+    """
+    Endpoint stub para cierre contractual manual.
+    De momento solo registra en auditoría.
+    """
+    log_event("contract_closed_manual", session_id=session_id, user_id=None, metadata={})
+    return {"ok": True, "session_id": session_id, "action": "close_contract"}
 
-    # Subimos un archivo ficticio (panel enviará uno real posteriormente)
-    upload_kyc_document_page(
-        operator.mangopay_legal_user_id,
-        doc["Id"],
-        b"fake-content",
+
+# ============================================================
+# 2) ENDPOINTS KYC OPERATORS (STUBS PARA PANEL)
+# ============================================================
+
+@router.post("/operators/{operator_id}/create-mangopay-account")
+def create_mangopay_account(operator_id: str) -> Dict[str, Any]:
+    """
+    Stub actual: simula la creación de cuenta MangoPay.
+    Registra en auditoría y devuelve payload de prueba.
+    """
+    log_event(
+        "operator_create_mangopay_account",
+        session_id=None,
+        user_id=None,
+        metadata={"operator_id": operator_id},
     )
+    return {
+        "operator_id": operator_id,
+        "status": "created_stub",
+        "message": "Cuenta MangoPay simulada (stub).",
+    }
 
-    submit_kyc_document(operator.mangopay_legal_user_id, doc["Id"])
 
-    log_operator_kyc_event(
-        operator_id,
-        "KYC_DOCUMENT_SUBMITTED",
-        mangopay_kyc_id=doc["Id"],
-        status="submitted",
-        payload=doc,
+@router.post("/operators/{operator_id}/upload-kyc-document")
+def upload_kyc_document(operator_id: str) -> Dict[str, Any]:
+    """
+    Stub actual: simula el envío de un documento KYC.
+    """
+    log_event(
+        "operator_upload_kyc_document",
+        session_id=None,
+        user_id=None,
+        metadata={"operator_id": operator_id},
     )
+    return {
+        "operator_id": operator_id,
+        "status": "kyc_document_uploaded_stub",
+        "message": "Documento KYC simulado (stub).",
+    }
 
-    return {"ok": True, "document": doc}
 
-
-@router.get("/internal/operators/{operator_id}/sync-kyc-status")
-def sync_kyc_status(operator_id: str):
+@router.get("/operators/{operator_id}/sync-kyc-status")
+def sync_kyc_status(operator_id: str) -> Dict[str, Any]:
     """
-    Consulta MangoPay y sincroniza estado KYC del operador.
+    Stub actual: simula la sincronización del estado KYC.
     """
-    operator = get_operator_by_id(operator_id)
-    if not operator:
-        raise HTTPException(404, "Operator not found")
+    log_event(
+        "operator_sync_kyc_status",
+        session_id=None,
+        user_id=None,
+        metadata={"operator_id": operator_id},
+    )
+    # Simulamos un estado 'VALIDATED' para pruebas
+    return {
+        "operator_id": operator_id,
+        "kyc_status": "VALIDATED_STUB",
+        "message": "Estado KYC simulado (stub).",
+    }
 
-    if not operator.mangopay_legal_user_id:
-        raise HTTPException(400, "Operator has no MangoPay legal user")
 
-    user_data = get_legal_user(operator.mangopay_legal_user_id)
+# ============================================================
+# 3) API REST DE MÓDULOS (SESSION MODULES)
+# ============================================================
 
-    kyc_level = user_data.get("KYCLevel")
+@router.get("/modules")
+def get_all_modules() -> Dict[str, Any]:
+    """
+    Lista todos los módulos (activos o no).
+    """
+    modules = list_modules()
+    return {"modules": modules}
 
-    if kyc_level == "REGULAR":
-        new_status = OperatorKycStatus.VALIDATED
-    elif kyc_level == "LIGHT":
-        new_status = OperatorKycStatus.IN_REVIEW
-    else:
-        new_status = OperatorKycStatus.PENDING
 
-    update_operator_kyc_status(operator_id, new_status, kyc_level)
+@router.get("/modules/{module_code}")
+def get_single_module(module_code: str) -> Dict[str, Any]:
+    """
+    Devuelve un módulo concreto por su module_code.
+    """
+    module = get_module(module_code)
+    if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
 
-    log_operator_kyc_event(
-        operator_id,
-        "KYC_STATUS_SYNC",
-        mangopay_kyc_id=None,
-        status=new_status.value,
-        payload=user_data,
+    return {"module": module}
+
+
+@router.patch("/sessions/{session_id}/module/{module_code}")
+def change_session_module(session_id: str, module_code: str) -> Dict[str, Any]:
+    """
+    Cambia el módulo de una sesión existente.
+    Usa module_repository.assign_module_to_session.
+    """
+
+    try:
+        updated = assign_module_to_session(session_id, module_code)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    log_event(
+        "module_changed_via_api",
+        session_id=session_id,
+        user_id=None,
+        metadata={"new_module": module_code},
     )
 
     return {
         "ok": True,
-        "new_status": new_status.value,
-        "kyc_level": kyc_level,
-        "raw": user_data,
+        "session": updated,
     }
