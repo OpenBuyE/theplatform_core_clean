@@ -3,96 +3,90 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime
 from typing import Dict, Any, List
 
 from backend_core.services.audit_repository import log_event
-
-# CORRECCIÓN: separar imports según repositorios correctos
 from backend_core.services.session_repository import (
     get_session_by_id,
     finish_session,
 )
-
 from backend_core.services.participant_repository import (
     get_participants_for_session,
     mark_awarded,
 )
-
 from backend_core.services.session_engine import session_engine
-from backend_core.services.module_repository import (
-    get_module_for_session,
-    mark_module_awarded,
-)
-
 from backend_core.services.contract_engine import contract_engine
-from backend_core.services.adjudicator_repository import get_seed_for_session
+from backend_core.services.module_repository import get_module_for_session
 
 
 class AdjudicatorEngine:
+    """
+    Motor de adjudicación determinista simplificado:
+    - No usa todavía tabla de seeds (para no romper nada).
+    - Usa session_id + ids de participantes para construir el hash.
+    """
+
+    def _validate_ready(self, session: Dict[str, Any], participants: List[Dict[str, Any]]):
+        if session["status"] != "active":
+            raise ValueError("La sesión no está activa.")
+
+        if not participants:
+            raise ValueError("La sesión no tiene participantes.")
+
+        if session["pax_registered"] < session["capacity"]:
+            raise ValueError("El aforo no está completo.")
 
     def run_adjudication(self, session_id: str) -> Dict[str, Any]:
         session = get_session_by_id(session_id)
         if not session:
-            raise ValueError("Session not found.")
+            raise ValueError("Sesión no encontrada.")
 
         participants = get_participants_for_session(session_id)
-        if not participants:
-            raise ValueError("No participants in session.")
 
-        # Capacity verification
-        if session["pax_registered"] < session["capacity"]:
-            raise ValueError("Aforo not completed.")
+        # Validaciones básicas
+        self._validate_ready(session, participants)
 
+        # Comprobar módulo (solo módulos deterministas deberían adjudicar)
         module = get_module_for_session(session_id)
-        if not module:
-            raise ValueError("Module not found for session.")
+        if module and module.get("module_status") == "cancelled":
+            raise ValueError("El módulo está cancelado; no se puede adjudicar.")
 
-        seed = get_seed_for_session(session_id)
-        public_seed = seed["public_seed"] if seed else "DEFAULT"
+        # Construir base determinista (sin seed por ahora)
+        base = session_id + "".join(p["id"] for p in participants)
+        digest = hashlib.sha256(base.encode()).hexdigest()
+        index = int(digest, 16) % len(participants)
 
-        concatenated = (
-            session_id +
-            session["series_id"] +
-            str(session["sequence_number"]) +
-            "".join([p["id"] for p in participants]) +
-            public_seed
-        )
+        winner = participants[index]
 
-        digest = hashlib.sha256(concatenated.encode()).hexdigest()
-        winner_index = int(digest, 16) % len(participants)
-        awarded = participants[winner_index]
+        # Marcar adjudicatario
+        mark_awarded(winner["id"])
 
-        # Mark awarded participant
-        mark_awarded(awarded["id"])
-
-        # Mark module as awarded
-        mark_module_awarded(module["id"])
-
-        # Finish session
+        # Cerrar sesión
         finish_session(session_id)
 
         log_event(
             "session_adjudicated",
             session_id=session_id,
             metadata={
-                "awarded_participant": awarded["id"],
+                "winner_participant_id": winner["id"],
                 "hash": digest,
-                "winner_index": winner_index,
+                "winner_index": index,
             },
         )
 
-        # Contract flow
-        contract_engine.on_session_awarded(session_id, awarded["id"])
+        # Lanzar flujo contractual
+        contract_engine.start_contract_flow(session_id)
 
         # Rolling
-        session_engine.try_rolling(session_id)
+        session_engine.run_rolling_if_needed(session_id)
 
         return {
             "session_id": session_id,
-            "awarded_participant": awarded,
+            "winner_participant_id": winner["id"],
+            "hash": digest,
+            "winner_index": index,
         }
 
 
-# Global instance
+# Instancia global
 adjudicator_engine = AdjudicatorEngine()
