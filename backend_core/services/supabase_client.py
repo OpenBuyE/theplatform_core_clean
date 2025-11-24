@@ -1,3 +1,5 @@
+# backend_core/services/supabase_client.py
+
 import os
 import requests
 
@@ -7,6 +9,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANO
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("SUPABASE_URL o SUPABASE_KEY no configurados.")
 
+
 class QueryBuilder:
     def __init__(self, table_name: str):
         self.table_name = table_name
@@ -15,22 +18,38 @@ class QueryBuilder:
         self._single = False
         self.columns = "*"
 
+    # ----------------------
     def select(self, columns="*"):
         self.columns = columns
         return self
 
+    # ----------------------
     def eq(self, field, value):
         self.filters.append(f"{field}=eq.{value}")
         return self
 
+    # ----------------------
+    def in_(self, field, values):
+        """
+        Filtro IN para campos de texto, por ejemplo:
+        .in_("status", ["finished", "expired"])
+        -> status=in.("finished","expired")
+        """
+        quoted = ",".join([f'"{v}"' for v in values])
+        self.filters.append(f"{field}=in.({quoted})")
+        return self
+
+    # ----------------------
     def order(self, field, desc=False):
         self.order_field = (field, desc)
         return self
 
+    # ----------------------
     def single(self):
         self._single = True
         return self
 
+    # ----------------------
     def _build_url(self):
         url = f"{SUPABASE_URL}/rest/v1/{self.table_name}?select={self.columns}"
         for f in self.filters:
@@ -42,13 +61,14 @@ class QueryBuilder:
             url += "&limit=1"
         return url
 
+    # ----------------------
     def execute(self, method="GET", json=None):
         url = self._build_url()
 
         headers = {
             "apikey": SUPABASE_KEY,
             "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
 
         if method == "GET":
@@ -65,7 +85,10 @@ class QueryBuilder:
 
         return type("Response", (), {"data": r.json()})
 
-def table(name: str):
+
+def table(name: str) -> QueryBuilder:
     return QueryBuilder(name)
 
+
+# Alias para compatibilidad con repositorios que usan supabase_client.table(...)
 supabase = type("SupabaseWrapper", (), {"table": table})
