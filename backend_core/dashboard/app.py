@@ -3,7 +3,7 @@
 import streamlit as st
 
 # ================================
-# IMPORTACIÓN DE VISTAS
+# IMPORTACIÓN DE VISTAS EXISTENTES
 # ================================
 from backend_core.dashboard.views.park_sessions import render_park_sessions
 from backend_core.dashboard.views.active_sessions import render_active_sessions
@@ -21,90 +21,83 @@ from backend_core.dashboard.views.contract_payment_status import (
 from backend_core.dashboard.views.operator_dashboard import (
     render_operator_dashboard,
 )
-from backend_core.dashboard.views.operator_dashboard_pro import (
-    render_operator_dashboard_pro,
-)
 from backend_core.dashboard.views.module_inspector import (
     render_module_inspector,
 )
 
+# ⚠️ TEMPORALMENTE DESACTIVADO PARA EVITAR BUCLE EN STREAMLIT CLOUD
+# from backend_core.dashboard.views.operator_dashboard_pro import (
+#     render_operator_dashboard_pro,
+# )
 
-# ================================
-# CONFIGURACIÓN GLOBAL STREAMLIT
-# ================================
+# ========================================
+# CONFIGURACIÓN GLOBAL DEL DASHBOARD
+# ========================================
 st.set_page_config(
-    page_title="Platform Core Dashboard",
+    page_title="The Platform Core",
+    page_icon="⚡",
     layout="wide",
 )
 
+# ================================
+# BARRA LATERAL / NAVEGACIÓN
+# ================================
+with st.sidebar:
+    st.title("⚡ Platform Core")
+
+    page = st.selectbox(
+        "Navegación",
+        [
+            "Parked Sessions",
+            "Active Sessions",
+            "Chains",
+            "History",
+            "Audit Logs",
+            "Module Inspector",
+            "Operator Dashboard",
+            # "Operator Dashboard Pro",   ← DESACTIVADO TEMPORALMENTE
+            "Admin Engine",
+            "Admin Seeds",
+            "Admin Operators / KYC",
+            "Contract Payment Status",
+        ],
+    )
 
 # ================================
-# OPCIONES DE MENÚ
+# RENDER DE VISTAS
 # ================================
-MENU_OPTIONS = [
-    "Module Inspector",
-    "Parked Sessions",
-    "Active Sessions",
-    "Chains",
-    "History",
-    "Audit Logs",
-    "Admin Engine",
-    "Admin Seeds",
-    "Admin Operators / KYC",
-    "Contract & Payment Status",
-    "Operator Dashboard",
-    "Operator Dashboard Pro",
-]
+if page == "Parked Sessions":
+    render_park_sessions()
 
+elif page == "Active Sessions":
+    render_active_sessions()
 
-def main():
-    # Sidebar
-    st.sidebar.title("Platform Core")
-    page = st.sidebar.selectbox("Navegación", MENU_OPTIONS)
+elif page == "Chains":
+    render_chains()
 
-    # ===============================
-    # ENRUTAMIENTO DE VISTAS
-    # ===============================
+elif page == "History":
+    render_history_sessions()
 
-    if page == "Module Inspector":
-        render_module_inspector()
+elif page == "Audit Logs":
+    render_audit_logs()
 
-    elif page == "Parked Sessions":
-        render_park_sessions()
+elif page == "Module Inspector":
+    render_module_inspector()
 
-    elif page == "Active Sessions":
-        render_active_sessions()
+elif page == "Operator Dashboard":
+    render_operator_dashboard()
 
-    elif page == "Chains":
-        render_chains()
+# elif page == "Operator Dashboard Pro":   ← DESACTIVADO TEMPORALMENTE
+#     render_operator_dashboard_pro()
 
-    elif page == "History":
-        render_history_sessions()
+elif page == "Admin Engine":
+    render_admin_engine()
 
-    elif page == "Audit Logs":
-        render_audit_logs()
+elif page == "Admin Seeds":
+    render_admin_seeds()
 
-    elif page == "Admin Engine":
-        render_admin_engine()
+elif page == "Admin Operators / KYC":
+    render_admin_operators_kyc()
 
-    elif page == "Admin Seeds":
-        render_admin_seeds()
-
-    elif page == "Admin Operators / KYC":
-        render_admin_operators_kyc()
-
-    elif page == "Contract & Payment Status":
-        render_contract_payment_status()
-
-    elif page == "Operator Dashboard":
-        render_operator_dashboard()
-
-    elif page == "Operator Dashboard Pro":
-        render_operator_dashboard_pro()
-
-    else:
-        st.error("Página no encontrada.")
-
-
-if __name__ == "__main__":
-    main()
+elif page == "Contract Payment Status":
+    render_contract_payment_status()
