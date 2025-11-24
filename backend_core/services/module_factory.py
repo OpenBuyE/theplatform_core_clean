@@ -2,37 +2,33 @@
 
 from __future__ import annotations
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 from backend_core.services.supabase_client import table
 from backend_core.services.audit_repository import log_event
-from backend_core.services.module_repository import (
-    create_module,
-)
-from backend_core.services.session_repository import (
-    create_parked_session,
-)
+from backend_core.services.module_repository import create_module
+from backend_core.services.session_repository import create_parked_session
 from backend_core.services.session_engine import session_engine
 
 
 MODULES_TABLE = "ca_modules"
 BATCHES_TABLE = "ca_module_batches"
+SERIES_TABLE = "ca_session_series"
 
 
 class ModuleFactory:
     """
-    Crea módulos de sesión en lote, permitiendo que un operador genere
-    N módulos idénticos de un producto (p.ej. 20 PS5).
-    
-    Cada módulo generado automáticamente:
-    - queda vinculado a un batch_id
-    - crea una serie y su primera sesión parked
-    - queda listo para rolling y adjudicación
+    Crea módulos y lotes de módulos (batches).
+    Cada módulo:
+        - crea un registro en ca_modules
+        - genera su propia serie en ca_session_series
+        - genera la primera sesión parked con sequence_number = 1
+        - queda listo para rolling + adjudicación determinista
     """
 
     # ============================================================
-    # 1) CREAR BATCH
+    # 1) CREAR BATCH COMPLETO
     # ============================================================
 
     def create_batch(
@@ -49,7 +45,7 @@ class ModuleFactory:
         if units <= 0:
             raise ValueError("units debe ser > 0")
 
-        # 1) Crear registro de batch
+        # 1. Crear el batch
         resp = (
             table(BATCHES_TABLE)
             .insert(
@@ -63,14 +59,14 @@ class ModuleFactory:
             )
             .execute()
         )
-        batch = resp.data[0]
 
+        batch = resp.data[0]
         batch_id = batch["id"]
 
         created_modules = []
 
-        # 2) Generar módulos uno a uno
-        for i in range(units):
+        # 2. Generar cada módulo
+        for _ in range(units):
             mod = self.create_single_module(
                 product_id=product_id,
                 module_code=module_code,
@@ -79,7 +75,7 @@ class ModuleFactory:
             )
             created_modules.append(mod)
 
-        # 3) Actualizar batch con unidades generadas
+        # 3. Actualizar unidades generadas
         (
             table(BATCHES_TABLE)
             .update({"generated_units": len(created_modules)})
@@ -87,6 +83,7 @@ class ModuleFactory:
             .execute()
         )
 
+        # 4. Registrar auditoría
         log_event(
             "module_batch_created",
             session_id=None,
@@ -105,7 +102,7 @@ class ModuleFactory:
         }
 
     # ============================================================
-    # 2) CREAR MÓDULO ÚNICO
+    # 2) CREAR UN MÓDULO ÚNICO
     # ============================================================
 
     def create_single_module(
@@ -113,16 +110,16 @@ class ModuleFactory:
         product_id: str,
         module_code: str,
         organization_id: str,
-        batch_id: str = None,
+        batch_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Crea un módulo único:
-        - Inserta módulo en ca_modules
-        - Crea serie
-        - Crea primera sesión parked
+        Crea un módulo:
+            - inserta en ca_modules
+            - crea serie en ca_session_series
+            - crea sesión parked inicial (sequence=1)
         """
 
-        # 1) Crear módulo base
+        # 1. Crear módulo base
         module = create_module(
             product_id=product_id,
             module_code=module_code,
@@ -132,19 +129,42 @@ class ModuleFactory:
 
         module_id = module["id"]
 
-        # 2) Crear serie y primera sesión parked
-        session = create_parked_session(
+        # 2. Crear serie (ca_session_series)
+        series = (
+            table(SERIES_TABLE)
+            .insert(
+                {
+                    "product_id": product_id,
+                    "organization_id": organization_id,
+                    "module_id": module_id,
+                }
+            )
+            .execute()
+        ).data[0]
+
+        series_id = series["id"]
+
+        # 3. Crear primera sesión parked (sequence_number = 1)
+        #    Usamos la firma correcta de create_parked_session:
+        #    (product_id, organization_id, series_id, sequence_number, capacity, expires_in_days, module_code, module_id)
+        first_session = create_parked_session(
             product_id=product_id,
             organization_id=organization_id,
+            series_id=series_id,
+            sequence_number=1,
+            capacity=1,  # ¡ATENCIÓN! Se debe actualizar cuando tengamos capacity real del producto
+            expires_in_days=5,
+            module_code=module_code,
             module_id=module_id,
         )
 
         log_event(
-            "module_created",
-            session_id=session["id"],
+            "module_created_and_initialized",
+            session_id=first_session["id"],
             metadata={
                 "module_id": module_id,
                 "module_code": module_code,
+                "series_id": series_id,
                 "product_id": product_id,
                 "batch_id": batch_id,
             },
@@ -152,11 +172,12 @@ class ModuleFactory:
 
         return {
             "module": module,
-            "first_session": session,
+            "series": series,
+            "first_session": first_session,
         }
 
     # ============================================================
-    # 3) CREAR MÚLTIPLES MÓDULOS (ATENCIÓN: no usa batches)
+    # 3) CREAR MÚLTIPLES MÓDULOS SIN BATCH (solo testing)
     # ============================================================
 
     def create_multiple_modules(
@@ -167,18 +188,21 @@ class ModuleFactory:
         units: int,
     ) -> List[Dict[str, Any]]:
         """
-        Genera N módulos idénticos, sin crear un batch.
-        Útil para test, pero en producción usar create_batch.
+        Genera N módulos idénticos sin crear batch.
         """
 
-        result = []
+        output = []
+
         for _ in range(units):
             mod = self.create_single_module(
-                product_id, module_code, organization_id
+                product_id=product_id,
+                module_code=module_code,
+                organization_id=organization_id,
+                batch_id=None,
             )
-            result.append(mod)
+            output.append(mod)
 
-        return result
+        return output
 
     # ============================================================
     # 4) CANCELAR MÓDULO
@@ -186,10 +210,7 @@ class ModuleFactory:
 
     def cancel_module(self, module_id: str, reason: str):
         """
-        Cancela un módulo:
-        - Cambia module_status a 'cancelled'
-        - Guarda motivo
-        - Detiene rolling (si aplica)
+        Cancela un módulo manualmente.
         """
 
         now = datetime.utcnow().isoformat()
@@ -200,17 +221,14 @@ class ModuleFactory:
                 {
                     "module_status": "cancelled",
                     "cancel_reason": reason,
+                    "updated_at": now,
                 }
             )
             .eq("id", module_id)
             .execute()
         )
 
-        log_event(
-            "module_cancelled",
-            session_id=None,
-            metadata={"module_id": module_id, "reason": reason},
-        )
+        log_event("module_cancelled", session_id=None, metadata={"module_id": module_id, "reason": reason})
 
         return resp.data[0] if resp.data else None
 
@@ -219,10 +237,6 @@ class ModuleFactory:
     # ============================================================
 
     def archive_module(self, module_id: str):
-        """
-        Archiva un módulo manualmente.
-        """
-
         now = datetime.utcnow().isoformat()
 
         resp = (
@@ -231,41 +245,30 @@ class ModuleFactory:
                 {
                     "module_status": "archived",
                     "archived_at": now,
+                    "updated_at": now,
                 }
             )
             .eq("id", module_id)
             .execute()
         )
 
-        log_event(
-            "module_archived",
-            session_id=None,
-            metadata={"module_id": module_id},
-        )
+        log_event("module_archived", session_id=None, metadata={"module_id": module_id})
 
         return resp.data[0] if resp.data else None
 
     # ============================================================
-    # 6) MARCAR MÓDULO SIN ADJUDICATARIO
+    # 6) MARCAR SIN ADJUDICATARIO
     # ============================================================
 
     def mark_no_award(self, module_id: str):
-        """
-        Marca un módulo como sin adjudicatario.
-        """
-
         resp = (
             table(MODULES_TABLE)
-            .update({"has_award": False, "module_status": "no_award"})
+            .update({"module_status": "no_award", "has_award": False})
             .eq("id", module_id)
             .execute()
         )
 
-        log_event(
-            "module_no_award",
-            session_id=None,
-            metadata={"module_id": module_id},
-        )
+        log_event("module_no_award", session_id=None, metadata={"module_id": module_id})
 
         return resp.data[0] if resp.data else None
 
