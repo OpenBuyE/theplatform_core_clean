@@ -1,125 +1,96 @@
-import streamlit as st
-import requests
+# backend_core/services/module_repository.py
 
-from backend_core.services.supabase_client import fetch_rows
-from backend_core.services.context import get_current_org
+from __future__ import annotations
+from typing import Optional, List, Dict, Any
 
-SUPABASE_URL = st.secrets["SUPABASE_URL"].rstrip("/")
-SUPABASE_KEY = st.secrets["SUPABASE_SERVICE_ROLE"]
+from backend_core.services.supabase_client import table
 
 
-def _headers() -> dict:
-    return {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
-    }
+MODULES_TABLE = "ca_session_modules"
+SESSIONS_TABLE = "ca_sessions"
 
 
-# -------------------------------------------------
-#   MÓDULOS DE SESIÓN
-# -------------------------------------------------
+# ---------------------------------------------------------
+# UTILIDADES PRINCIPALES
+# ---------------------------------------------------------
 
-def list_session_modules() -> list[dict]:
+def list_modules() -> List[Dict[str, Any]]:
     """
-    Devuelve todos los módulos de sesión definidos en session_modules.
-    Ejemplos de code:
-        - rolling   (reposición automática)
-        - scheduled (programada)
-        - standby   (en preparación)
+    Devuelve todos los módulos registrados en ca_session_modules.
     """
-    params = {
-        "select": "*",
-        "order": "created_at.asc",
-    }
-    return fetch_rows("session_modules", params)
+    resp = (
+        table(MODULES_TABLE)
+        .select("*")
+        .order("module_code")
+        .execute()
+    )
+    return resp.data or []
 
 
-# -------------------------------------------------
-#   SERIES DE SESIÓN
-# -------------------------------------------------
-
-def list_session_series() -> list[dict]:
+def get_module(module_code: str) -> Optional[Dict[str, Any]]:
     """
-    Devuelve todas las series de sesión (session_series)
-    de la organización activa.
+    Devuelve un módulo específico por su module_code.
     """
-    org_id = get_current_org()
-    if not org_id:
-        st.warning("Selecciona una organización para ver las series de sesión.")
-        return []
-
-    params = {
-        "select": "*",
-        "organization_id": f"eq.{org_id}",
-        "order": "created_at.asc",
-    }
-    return fetch_rows("session_series", params)
+    resp = (
+        table(MODULES_TABLE)
+        .select("*")
+        .eq("module_code", module_code)
+        .single()
+        .execute()
+    )
+    return resp.data or None
 
 
-def get_session_series_by_code(code: str) -> dict | None:
+def get_active_modules() -> List[Dict[str, Any]]:
     """
-    Devuelve una serie concreta por su código (ej: 'X23')
-    dentro de la organización activa.
+    Devuelve solo los módulos activos.
     """
-    org_id = get_current_org()
-    if not org_id:
-        st.warning("Selecciona una organización para buscar series de sesión.")
-        return None
-
-    params = {
-        "select": "*",
-        "organization_id": f"eq.{org_id}",
-        "code": f"eq.{code}",
-    }
-    rows = fetch_rows("session_series", params)
-    if rows:
-        return rows[0]
-    return None
+    resp = (
+        table(MODULES_TABLE)
+        .select("*")
+        .eq("active", True)
+        .order("module_code")
+        .execute()
+    )
+    return resp.data or []
 
 
-def create_session_series(payload: dict) -> dict | None:
+# ---------------------------------------------------------
+# ASIGNACIÓN DE MÓDULO A UNA SESIÓN
+# ---------------------------------------------------------
+
+def assign_module_to_session(session_id: str, module_code: str) -> Dict[str, Any]:
     """
-    Crea una nueva serie de sesión en session_series.
-    El payload debe incluir como mínimo:
-        - code
-        - name
-        - module_id
-    y opcionalmente:
-        - product_id
-        - product_description
-        - unit_price
-        - currency
-        - max_pax
-        - activation_threshold
-        - location
+    Asigna un módulo a una sesión. Valida que el módulo exista.
     """
-    org_id = get_current_org()
-    if not org_id:
-        st.error("No hay organización activa para crear series.")
-        return None
+    module = get_module(module_code)
+    if not module:
+        raise ValueError(f"Module '{module_code}' no existe en ca_session_modules.")
 
-    url = f"{SUPABASE_URL}/rest/v1/session_series"
-    headers = _headers()
+    resp = (
+        table(SESSIONS_TABLE)
+        .update({"module_code": module_code})
+        .eq("id", session_id)
+        .execute()
+    )
 
-    body = payload.copy()
-    body["organization_id"] = org_id
+    if not resp.data:
+        raise RuntimeError(f"Error asignando module_code '{module_code}' a session '{session_id}'.")
 
-    try:
-        resp = requests.post(url, headers=headers, json=body, timeout=10)
+    return resp.data[0]
 
-        if not resp.ok:
-            st.error(f"Error al crear la serie de sesión ({resp.status_code}).")
-            # st.write(resp.text)
-            return None
 
-        data = resp.json()
-        if isinstance(data, list) and data:
-            return data[0]
-        return data
+def get_session_module(session: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Devuelve el módulo completo asociado a una sesión.
+    Si module_code no existe, retorna el módulo por defecto (A_DETERMINISTIC).
+    """
+    module_code = session.get("module_code") or "A_DETERMINISTIC"
+    module = get_module(module_code)
 
-    except Exception as e:
-        st.error(f"Error al conectar para crear la serie: {e}")
-        return None
+    if not module:
+        # Fallback total — no debería ocurrir si la tabla está bien configurada
+        return get_module("A_DETERMINISTIC")
+
+    return module
 
