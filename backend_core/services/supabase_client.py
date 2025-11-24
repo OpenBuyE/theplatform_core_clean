@@ -1,32 +1,28 @@
-"""
-supabase_client.py
-Cliente estable para Supabase usando librerías oficiales:
-postgrest + gotrue + storage3 + supafunc
+# backend_core/services/supabase_client.py
 
-Compatible con Streamlit Cloud y Python 3.13
-"""
-
+from supabase import create_client, Client
 import os
-from dotenv import load_dotenv
-from postgrest import SyncPostgrestClient
 
-load_dotenv()
+# ============================================
+# CONFIG SUPABASE (usa variables de entorno)
+# ============================================
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
 
-if not SUPABASE_URL or not SUPABASE_ANON_KEY:
-    raise RuntimeError("SUPABASE_URL o SUPABASE_KEY no están definidas.")
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise ValueError("SUPABASE_URL o SUPABASE_KEY no están configurados en variables de entorno.")
 
-# Base URL for the REST API (postgrest endpoint)
-REST_URL = SUPABASE_URL.rstrip("/") + "/rest/v1"
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Cliente PostgREST (el que usamos para .select() .insert() .update())
-supabase = SyncPostgrestClient(
-    REST_URL,
-    headers={
-        "apikey": SUPABASE_ANON_KEY,
-        "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
-        "Content-Type": "application/json",
-    },
-)
+
+# ============================================
+# API estándar esperada por los repositories
+# ============================================
+
+def table(name: str):
+    """
+    Compatibilidad con el codebase actual:
+    hace que supabase_client.table("mi_tabla") funcione.
+    """
+    return supabase.table(name)
