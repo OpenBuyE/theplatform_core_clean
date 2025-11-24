@@ -12,6 +12,7 @@ from backend_core.dashboard.views.admin_seeds import render_admin_seeds
 from backend_core.dashboard.views.admin_users import render_admin_users
 from backend_core.dashboard.views.contract_payment_status import render_contract_payment_status
 from backend_core.dashboard.views.admin_operators_kyc import render_admin_operators_kyc
+from backend_core.dashboard.views.operator_dashboard import render_operator_dashboard
 
 
 def main():
@@ -32,6 +33,7 @@ def main():
         "Admin Seeds",
         "Admin Users",
         "Admin Operators / KYC",
+        "Operator Dashboard",
         "Contract & Payment Status",
     ]
 
@@ -61,6 +63,8 @@ def main():
         render_admin_users()
     elif page == "Admin Operators / KYC":
         render_admin_operators_kyc()
+    elif page == "Operator Dashboard":
+        render_operator_dashboard()
     elif page == "Contract & Payment Status":
         render_contract_payment_status()
 
