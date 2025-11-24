@@ -1,136 +1,132 @@
 # backend_core/dashboard/views/park_sessions.py
 
 import streamlit as st
+from datetime import datetime, timedelta
 
 from backend_core.services.session_repository import (
     create_parked_session,
     activate_session,
     get_parked_sessions,
 )
-
+from backend_core.services.audit_repository import log_event
 from backend_core.services.product_repository import list_products, get_product
-from backend_core.services.audit_repository import AuditRepository
+from backend_core.services.module_repository import list_modules, assign_module_to_session
 
 
-audit = AuditRepository()
-
+# =======================================================
+# CREAR SESIÓN PARKED
+# =======================================================
 
 def render_park_sessions():
-    st.title("Parked Sessions")
-    st.write("Crear y gestionar sesiones en estado 'parked' con productos reales.")
 
-    st.subheader("Crear nueva sesión parked")
+    st.header("📦 Parked Sessions (Crear / Gestionar)")
 
-    # --------------------------------------------------------
-    # Cargar productos para dropdown
-    # --------------------------------------------------------
-    st.write("### Selección de producto")
+    st.subheader("Crear nueva sesión")
 
-    organization_id = st.text_input(
-        "Organization ID (para cargar productos)",
-        placeholder="uuid-organización",
-        key="org_products_input",
+    # -------------------------------------------------------
+    # LISTA PRODUCTOS
+    # -------------------------------------------------------
+    products = list_products()
+    product_dict = {p["id"]: p for p in products}
+    product_names = {f"{p['name']} — {p['price']}€": p["id"] for p in products}
+
+    selected_product_label = st.selectbox(
+        "Producto:",
+        options=list(product_names.keys()) if product_names else ["No hay productos"],
     )
 
-    if organization_id:
-        products = list_products(organization_id)
-    else:
-        products = []
+    selected_product_id = product_names.get(selected_product_label)
 
-    product_map = {
-        f"{p['name']} — {p['price_final']}€ (SKU: {p.get('sku','')})": p["id"]
-        for p in products
-    }
+    # -------------------------------------------------------
+    # SELECTOR DE MÓDULO
+    # -------------------------------------------------------
 
-    if products:
-        product_label = st.selectbox(
-            "Selecciona un producto",
-            list(product_map.keys()),
-            help="Productos reales desde products_v2",
-        )
+    st.subheader("Módulo de Sesión")
 
-        selected_product_id = product_map[product_label]
-        selected_product = get_product(selected_product_id)
+    modules = list_modules()
+    modules_map = {f"{m['module_code']} — {m['name']}": m["module_code"] for m in modules}
 
-        # Vista previa del producto
-        st.write("### Vista previa del producto seleccionado:")
-        st.json(selected_product)
+    selected_module_label = st.selectbox(
+        "Selecciona un módulo:",
+        options=list(modules_map.keys()),
+    )
 
-    else:
-        selected_product_id = None
-        st.info("Introduce Organization ID para cargar productos.")
-        selected_product = None
+    selected_module_code = modules_map[selected_module_label]
 
-    # --------------------------------------------------------
+    # -------------------------------------------------------
+    # OTROS CAMPOS
+    # -------------------------------------------------------
+
+    organization_id = st.text_input(
+        "Organization ID:",
+        placeholder="UUID de operador",
+    )
+
+    capacity = st.number_input(
+        "Aforo", min_value=1, step=1, value=10
+    )
+
+    expires_in_days = st.number_input(
+        "Expira en días (5 por defecto):",
+        min_value=1, step=1, value=5
+    )
+
+    expires_at = datetime.utcnow() + timedelta(days=expires_in_days)
+
+    # -------------------------------------------------------
     # CREAR SESIÓN
-    # --------------------------------------------------------
+    # -------------------------------------------------------
 
-    st.write("### Crear sesión parked")
+    if st.button("Crear sesión PARKED"):
+        if not organization_id or not selected_product_id:
+            st.error("Organization ID y producto son obligatorios.")
+            return
 
-    with st.form("create_session_form"):
-        series_id = st.text_input("Series ID", placeholder="uuid-serie")
-
-        capacity = st.number_input(
-            "Capacity (aforo)",
-            min_value=1,
-            step=1,
-            help="Número de participantes necesarios para completar la sesión"
+        session = create_parked_session(
+            product_id=selected_product_id,
+            organization_id=organization_id,
+            capacity=capacity,
+            expires_at=expires_at,
         )
 
-        submit_create = st.form_submit_button("Crear sesión parked")
+        # Asignar módulo
+        assign_module_to_session(session["id"], selected_module_code)
 
-        if submit_create:
-            if not organization_id or not series_id or not selected_product_id:
-                st.error("Todos los campos son obligatorios, incluyendo el producto.")
-            else:
-                session = create_parked_session(
-                    series_id=series_id,
-                    product_id=selected_product_id,
-                    organization_id=organization_id,
-                    capacity=capacity,
-                )
-                audit.log(
-                    action="SESSION_CREATED_PARKED",
-                    session_id=session["id"],
-                    metadata={"product_id": selected_product_id},
-                )
-                st.success(f"Sesión creada correctamente: {session['id']}")
+        log_event(
+            action="session_created_parked",
+            session_id=session["id"],
+            user_id=None,
+            metadata={"module": selected_module_code},
+        )
 
-    st.divider()
+        st.success(f"Sesión creada correctamente (ID: {session['id']})")
 
-    # --------------------------------------------------------
-    # SESIONES PARKED EXISTENTES
-    # --------------------------------------------------------
+    st.markdown("---")
 
-    st.subheader("Sesiones parked existentes")
+    # =======================================================
+    # LISTAR SESIONES PARKED
+    # =======================================================
+
+    st.subheader("Sesiones Parked existentes")
 
     sessions = get_parked_sessions()
-    if not sessions:
-        st.info("No hay sesiones parked.")
-        return
 
     for s in sessions:
-        st.write(f"📦 **Sesión:** {s['id']}")
+        st.write(f"### Sesión: {s['id']}")
+        st.write(f"- Producto: {s['product_id']}")
         st.write(f"- Organization: {s['organization_id']}")
-        st.write(f"- Series ID: {s['series_id']}")
-        st.write(f"- Capacity: {s['capacity']}")
+        st.write(f"- Aforo: {s['capacity']}")
         st.write(f"- Pax Registered: {s['pax_registered']}")
+        st.write(f"- Expira: {s['expires_at']}")
+        st.write(f"- Módulo: **{s.get('module_code', 'A_DETERMINISTIC')}**")
 
-        # Mostrar nombre del producto
         product = get_product(s["product_id"])
         if product:
-            st.write(f"- Producto: **{product['name']}** — {product['price_final']}€")
+            st.write(f"- Producto: **{product['name']}** — {product['price']}€")
             if product.get("image_url"):
                 st.image(product["image_url"], width=200)
 
-        st.write("---")
-
-        if st.button(f"Activar sesión {s['id']}", key=f"activate_{s['id']}"):
+        # Activar sesión
+        if st.button(f"Activar sesión {s['id']}"):
             activate_session(s["id"])
-            audit.log(
-                action="SESSION_ACTIVATED_FROM_UI",
-                session_id=s["id"],
-                metadata={},
-            )
-            st.success(f"Sesión activada: {s['id']}")
-            st.experimental_rerun()
+            st.success("Sesión activada correctamente")
