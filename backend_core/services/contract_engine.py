@@ -1,13 +1,10 @@
 # backend_core/services/contract_engine.py
 
-from __future__ import annotations
-
-from typing import Dict, Any
-from datetime import datetime
+from typing import Dict, Any, Optional
 
 from backend_core.services.audit_repository import log_event
 from backend_core.services.session_repository import get_session_by_id
-from backend_core.services.module_repository import get_module_for_session, mark_module_awarded
+from backend_core.services.module_repository import get_module_for_session
 from backend_core.services.payment_state_machine import (
     init_payment_session,
     update_payment_state,
@@ -17,52 +14,42 @@ from backend_core.services.wallet_orchestrator import wallet_orchestrator
 
 
 class ContractEngine:
+    """
+    Motor contractual dependiente del módulo asignado.
+    """
 
-    def start_contract_flow(self, session_id: str):
+    def start_contract(self, session_id: str) -> None:
         session = get_session_by_id(session_id)
-        if not session:
-            raise ValueError(f"No session found {session_id}")
-
         module = get_module_for_session(session_id)
 
-        log_event(
-            "contract_flow_started",
-            session_id=session_id,
-            metadata={"module_id": module["id"] if module else None},
-        )
+        log_event("contract_started", session_id=session_id, metadata=module)
 
-        init_payment_session(session_id)
+        # Inicializar máquina de pagos solo si aplica
+        if module and module["module_code"] == "DETERMINISTIC":
+            init_payment_session(session_id)
 
-    def confirm_delivery(self, session_id: str):
-        update_payment_state(session_id, "DELIVERED")
-
-        log_event("delivery_confirmed", session_id=session_id)
-
-    def close_contract(self, session_id: str):
-        now = datetime.utcnow().isoformat()
-
+    def on_deposit_ok(self, session_id: str) -> None:
+        session = get_session_by_id(session_id)
         module = get_module_for_session(session_id)
-        if module:
-            mark_module_awarded(module["id"])
 
-        update_payment_state(session_id, "CLOSED")
+        log_event("deposit_authorized", session_id=session_id)
 
-        log_event("contract_closed", session_id=session_id, metadata={"closed_at": now})
+        if module and module["module_code"] == "DETERMINISTIC":
+            update_payment_state(session_id, "DEPOSITS_OK")
 
-    def handle_deposit_ok(self, payload: Dict[str, Any]):
-        session_id = payload["session_id"]
-        update_payment_state(session_id, "DEPOSITS_OK")
-        log_event("deposit_ok_received", session_id=session_id)
+    def on_settlement_completed(self, session_id: str) -> None:
+        session = get_session_by_id(session_id)
+        module = get_module_for_session(session_id)
 
-    def handle_settlement(self, payload: Dict[str, Any]):
-        session_id = payload["session_id"]
-        update_payment_state(session_id, "SETTLED")
         log_event("settlement_completed", session_id=session_id)
 
-    def handle_force_majeure(self, payload: Dict[str, Any]):
-        session_id = payload["session_id"]
+        if module and module["module_code"] == "DETERMINISTIC":
+            update_payment_state(session_id, "SETTLED")
+
+    def on_force_majeure_refund(self, session_id: str) -> None:
         update_payment_state(session_id, "FORCE_MAJEURE")
         log_event("force_majeure_refund", session_id=session_id)
 
 
 contract_engine = ContractEngine()
+
