@@ -3,7 +3,7 @@
 import streamlit as st
 
 # ================================
-# IMPORT DE TODAS LAS VISTAS
+# IMPORTACIÓN DE VISTAS
 # ================================
 from backend_core.dashboard.views.park_sessions import render_park_sessions
 from backend_core.dashboard.views.active_sessions import render_active_sessions
@@ -30,7 +30,7 @@ from backend_core.dashboard.views.module_inspector import (
 
 
 # ================================
-# CONFIG GLOBAL
+# CONFIGURACIÓN GLOBAL STREAMLIT
 # ================================
 st.set_page_config(
     page_title="Platform Core Dashboard",
@@ -39,7 +39,7 @@ st.set_page_config(
 
 
 # ================================
-# NAVIGATION MENU
+# OPCIONES DE MENÚ
 # ================================
 MENU_OPTIONS = [
     "Module Inspector",
@@ -58,6 +58,7 @@ MENU_OPTIONS = [
 
 
 def main():
+    # Sidebar
     st.sidebar.title("Platform Core")
     page = st.sidebar.selectbox("Navegación", MENU_OPTIONS)
 
