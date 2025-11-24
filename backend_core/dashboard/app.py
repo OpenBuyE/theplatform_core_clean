@@ -2,10 +2,7 @@
 
 import streamlit as st
 
-# =============================
-# Importación de vistas
-# =============================
-
+# Importación de vistas existentes
 from backend_core.dashboard.views.park_sessions import render_park_sessions
 from backend_core.dashboard.views.active_sessions import render_active_sessions
 from backend_core.dashboard.views.chains import render_chains
@@ -22,92 +19,72 @@ from backend_core.dashboard.views.contract_payment_status import (
 from backend_core.dashboard.views.operator_dashboard import (
     render_operator_dashboard,
 )
-from backend_core.dashboard.views.operator_dashboard_pro import (
-    render_operator_dashboard_pro,
-)
 from backend_core.dashboard.views.module_inspector import (
     render_module_inspector,
 )
 
 
-# =============================
-# Configuración global
-# =============================
-
-st.set_page_config(
-    page_title="Platform Core Dashboard",
-    page_icon="🧩",
-    layout="wide",
-)
-
-
-# =============================
-# Main
-# =============================
-
 def main():
+    st.set_page_config(
+        page_title="Platform Core Dashboard",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
 
-    st.title("🧩 Platform Core — Dashboard")
+    st.sidebar.title("Platform Core — Safe Boot Mode")
 
-    # -----------------------------------------
-    #   NAVEGACIÓN PRINCIPAL
-    # -----------------------------------------
-    menu = [
-        "Parked Sessions",
-        "Active Sessions",
-        "Chains",
-        "History",
-        "Audit Logs",
-        "Contract & Payment Status",
-        "Operator Dashboard",
-        "Operator Dashboard Pro",        # <<< ACTIVADO
-        "Module Inspector",
-        "Admin Engine",
-        "Admin Seeds",
-        "Admin Operators / KYC",
-    ]
+    menu = st.sidebar.selectbox(
+        "Navegación",
+        [
+            "Module Inspector",
+            "Parked Sessions",
+            "Active Sessions",
+            "Chains",
+            "History",
+            "Audit Logs",
+            "Contract & Payment Status",
+            "Operator Dashboard",
+            # ❌ PRO DASHBOARD REMOVED TEMPORARILY
+            # "Operator Dashboard Pro",
+            "Admin Engine",
+            "Admin Seeds",
+            "Admin Operators / KYC",
+        ],
+    )
 
-    page = st.sidebar.selectbox("Navigation", menu)
-
-    # -----------------------------------------
-    #   RENDER DE VISTAS
-    # -----------------------------------------
-
-    if page == "Parked Sessions":
+    # RENDER DE VISTAS
+    if menu == "Parked Sessions":
         render_park_sessions()
 
-    elif page == "Active Sessions":
+    elif menu == "Active Sessions":
         render_active_sessions()
 
-    elif page == "Chains":
+    elif menu == "Chains":
         render_chains()
 
-    elif page == "History":
+    elif menu == "History":
         render_history_sessions()
 
-    elif page == "Audit Logs":
+    elif menu == "Audit Logs":
         render_audit_logs()
 
-    elif page == "Contract & Payment Status":
-        render_contract_payment_status()
-
-    elif page == "Operator Dashboard":
-        render_operator_dashboard()
-
-    elif page == "Operator Dashboard Pro":
-        render_operator_dashboard_pro()   # <<< YA ESTÁ HABILITADO
-
-    elif page == "Module Inspector":
-        render_module_inspector()
-
-    elif page == "Admin Engine":
+    elif menu == "Admin Engine":
         render_admin_engine()
 
-    elif page == "Admin Seeds":
-        render_admin_seeds()
-
-    elif page == "Admin Operators / KYC":
+    elif menu == "Admin Operators / KYC":
         render_admin_operators_kyc()
+
+    elif menu == "Contract & Payment Status":
+        render_contract_payment_status()
+
+    elif menu == "Operator Dashboard":
+        render_operator_dashboard()
+
+    elif menu == "Module Inspector":
+        render_module_inspector()
+
+    elif menu == "Admin Seeds":
+        render_admin_seeds()
 
 
 if __name__ == "__main__":
