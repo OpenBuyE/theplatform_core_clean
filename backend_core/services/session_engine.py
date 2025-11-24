@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Optional
+from datetime import datetime
 
 from backend_core.services.supabase_client import table
 from backend_core.services.audit_repository import log_event
 from backend_core.services.session_repository import (
     get_session_by_id,
-    activate_session,
     finish_session,
     get_next_session_in_series,
 )
-from backend_core.services.module_repository import get_session_module
+from backend_core.services.module_repository import get_module_for_session
 from backend_core.services.contract_engine import contract_engine
 
 
@@ -21,127 +20,57 @@ SESSIONS_TABLE = "ca_sessions"
 
 
 class SessionEngine:
+    """
+    Gestiona expiraciones, rolling, validaciones.
+    """
 
     # ============================================================
-    # 1) PROCESAMIENTO DE EXPIRACIONES
+    # TRY ROLLING
     # ============================================================
 
-    def process_expiration(self, session: dict) -> Optional[dict]:
+    def try_rolling(self, finished_session_id: str):
         """
-        Verifica y aplica expiración de sesiones para módulos B y C.
+        Cuando una sesión se finaliza, activar la siguiente en su serie.
         """
 
-        module = get_session_module(session)
+        session = get_session_by_id(finished_session_id)
+        if not session:
+            return
 
-        if module["module_code"] not in ["B_AUTO_EXPIRE"]:
-            return session  # Solo el módulo B expira automático
+        series_id = session["series_id"]
+        seq = session["sequence_number"]
 
-        expires_at = session.get("expires_at")
-        if not expires_at:
-            return session
-
-        now = datetime.utcnow()
-        exp_dt = (
-            expires_at if isinstance(expires_at, datetime) else datetime.fromisoformat(expires_at)
-        )
-
-        if now >= exp_dt and session["status"] == "active":
-            # finalizar sesión
-            finished = finish_session(session["id"])
-
+        next_session = get_next_session_in_series(series_id, seq)
+        if not next_session:
+            # No queda rolling pendiente
             log_event(
-                "session_auto_expired",
-                session_id=session["id"],
-                metadata={"expires_at": expires_at},
+                "rolling_ended",
+                session_id=finished_session_id,
+                metadata={"series_id": series_id},
             )
+            return
 
-            return finished
+        # Activate next session
+        now = datetime.utcnow().isoformat()
 
-        return session
-
-    # ============================================================
-    # 2) ACTIVACIÓN PROGRAMADA
-    # ============================================================
-
-    def activate_if_needed(self, session_id: str) -> dict:
-        """
-        Activa una sesión parked si cumple condiciones.
-        Solo módulos A y B pueden activarse.
-        """
-
-        session = get_session_by_id(session_id)
-        module = get_session_module(session)
-
-        if module["module_code"] in ["C_PRELAUNCH"]:
-            # No se activa automáticamente
-            return session
-
-        if session["status"] == "parked":
-            return activate_session(session_id)
-
-        return session
-
-    # ============================================================
-    # 3) ROLLING
-    # ============================================================
-
-    def process_rolling(self, session: dict) -> Optional[dict]:
-        """
-        Si una sesión termina (finished), activa la siguiente en su serie.
-        Aplica SOLO a módulo A (determinista).
-        """
-
-        module = get_session_module(session)
-
-        if module["module_code"] != "A_DETERMINISTIC":
-            return None
-
-        # Necesitamos siguiente sesión en la serie
-        next_sess = get_next_session_in_series(
-            session["series_id"], session["sequence_number"]
+        (
+            table(SESSIONS_TABLE)
+            .update(
+                {
+                    "status": "active",
+                    "activated_at": now,
+                }
+            )
+            .eq("id", next_session["id"])
+            .execute()
         )
-
-        if not next_sess:
-            return None  # No hay más sesiones en la serie
-
-        # Activamos la siguiente
-        activated = activate_session(next_sess["id"])
 
         log_event(
-            "rolling_session_activated",
-            session_id=activated["id"],
-            metadata={
-                "previous_session_id": session["id"],
-                "series_id": session["series_id"],
-            },
+            "rolling_session_started",
+            session_id=next_session["id"],
+            metadata={"previous_session": finished_session_id},
         )
 
-        return activated
 
-    # ============================================================
-    # 4) OPERACIÓN DE MÓDULOS — PROCESO GENERAL
-    # ============================================================
-
-    def process_session(self, session_id: str) -> dict:
-        """
-        Punto de entrada general para procesar una sesión:
-        - expiración
-        - activación
-        - rolling
-        """
-
-        session = get_session_by_id(session_id)
-        if not session:
-            raise ValueError("Session not found")
-
-        module = get_session_module(session)
-
-        # Expiración solo aplica a Módulo B
-        if module["module_code"] == "B_AUTO_EXPIRE":
-            session = self.process_expiration(session)
-
-        return session
-
-
-# Instancia global
+# Global instance
 session_engine = SessionEngine()
