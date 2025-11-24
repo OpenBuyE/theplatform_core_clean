@@ -10,123 +10,117 @@ from backend_core.services.session_repository import (
 )
 from backend_core.services.audit_repository import log_event
 from backend_core.services.product_repository import list_products, get_product
-from backend_core.services.module_repository import list_modules, assign_module_to_session
+from backend_core.services.module_repository import (
+    list_all_modules,
+    assign_module_to_session,
+)
+from backend_core.services.module_repository import get_module_by_id
 
 
 # =======================================================
-# CREAR SESIÓN PARKED
+# VISTA PARKED SESSIONS
 # =======================================================
 
 def render_park_sessions():
 
-    st.header("📦 Parked Sessions (Crear / Gestionar)")
+    st.header("Parked Sessions")
 
-    st.subheader("Crear nueva sesión")
-
-    # -------------------------------------------------------
-    # LISTA PRODUCTOS
-    # -------------------------------------------------------
+    # =============================
+    # 1. Selección de producto
+    # =============================
     products = list_products()
-    product_dict = {p["id"]: p for p in products}
-    product_names = {f"{p['name']} — {p['price']}€": p["id"] for p in products}
+    product_map = {p["name"]: p["id"] for p in products}
+    product_names = list(product_map.keys())
 
-    selected_product_label = st.selectbox(
-        "Producto:",
-        options=list(product_names.keys()) if product_names else ["No hay productos"],
-    )
+    if not products:
+        st.warning("No hay productos disponibles.")
+        return
 
-    selected_product_id = product_names.get(selected_product_label)
+    selected_product = st.selectbox("Producto", product_names)
+    product_id = product_map[selected_product]
 
-    # -------------------------------------------------------
-    # SELECTOR DE MÓDULO
-    # -------------------------------------------------------
+    st.write("---")
 
-    st.subheader("Módulo de Sesión")
+    # =============================
+    # 2. Selección de módulo
+    # =============================
+    modules = list_all_modules()
+    if not modules:
+        st.warning("No hay módulos creados.")
+        return
 
-    modules = list_modules()
-    modules_map = {f"{m['module_code']} — {m['name']}": m["module_code"] for m in modules}
+    module_options = {
+        f"{m['module_code']} — {m['id'][0:8]}": m["id"] for m in modules
+    }
 
-    selected_module_label = st.selectbox(
-        "Selecciona un módulo:",
-        options=list(modules_map.keys()),
-    )
+    selected_module_label = st.selectbox("Módulo asociado", list(module_options.keys()))
+    selected_module_id = module_options[selected_module_label]
 
-    selected_module_code = modules_map[selected_module_label]
+    st.write("---")
 
-    # -------------------------------------------------------
-    # OTROS CAMPOS
-    # -------------------------------------------------------
+    # =============================
+    # 3. Parámetros de sesión
+    # =============================
+    capacity = st.number_input("Capacity", value=10, min_value=1)
+    expires_in_days = st.number_input("Expiración (días)", value=5, min_value=1)
 
-    organization_id = st.text_input(
-        "Organization ID:",
-        placeholder="UUID de operador",
-    )
+    st.write("---")
 
-    capacity = st.number_input(
-        "Aforo", min_value=1, step=1, value=10
-    )
-
-    expires_in_days = st.number_input(
-        "Expira en días (5 por defecto):",
-        min_value=1, step=1, value=5
-    )
-
-    expires_at = datetime.utcnow() + timedelta(days=expires_in_days)
-
-    # -------------------------------------------------------
-    # CREAR SESIÓN
-    # -------------------------------------------------------
-
+    # =============================
+    # 4. Crear sesión parked
+    # =============================
     if st.button("Crear sesión PARKED"):
-        if not organization_id or not selected_product_id:
-            st.error("Organization ID y producto son obligatorios.")
-            return
+
+        # Crear serie y sesiones corresponde a module_factory.
+        # Aquí solo estamos creando sesiones manuales para debug.
+        now = datetime.utcnow()
+
+        # sequence_number fijo para debug (NO producción)
+        sequence_number = 1  
 
         session = create_parked_session(
-            product_id=selected_product_id,
-            organization_id=organization_id,
+            product_id=product_id,
+            organization_id="00000000-0000-0000-0000-000000000001",
+            series_id="DEBUG_SERIES",
+            sequence_number=sequence_number,
             capacity=capacity,
-            expires_at=expires_at,
+            expires_in_days=expires_in_days,
+            module_code="A_DETERMINISTIC",
+            module_id=selected_module_id,
         )
 
-        # Asignar módulo
-        assign_module_to_session(session["id"], selected_module_code)
+        log_event("parked_session_created_manual", session_id=session["id"])
 
-        log_event(
-            action="session_created_parked",
-            session_id=session["id"],
-            user_id=None,
-            metadata={"module": selected_module_code},
-        )
+        st.success(f"Sesión parked creada: {session['id']}")
 
-        st.success(f"Sesión creada correctamente (ID: {session['id']})")
+    st.write("---")
 
-    st.markdown("---")
+    # =============================
+    # 5. Mostrar parked existentes
+    # =============================
+    st.subheader("Sesiones PARKED existentes")
 
-    # =======================================================
-    # LISTAR SESIONES PARKED
-    # =======================================================
+    parked = get_parked_sessions()
 
-    st.subheader("Sesiones Parked existentes")
+    if not parked:
+        st.info("No hay sesiones parked.")
+        return
 
-    sessions = get_parked_sessions()
-
-    for s in sessions:
-        st.write(f"### Sesión: {s['id']}")
-        st.write(f"- Producto: {s['product_id']}")
-        st.write(f"- Organization: {s['organization_id']}")
-        st.write(f"- Aforo: {s['capacity']}")
-        st.write(f"- Pax Registered: {s['pax_registered']}")
+    for s in parked:
+        st.write(f"### Sesión {s['id']}")
+        st.write(f"- Estado: {s['status']}")
+        st.write(f"- Aforo: {s['pax_registered']} / {s['capacity']}")
         st.write(f"- Expira: {s['expires_at']}")
-        st.write(f"- Módulo: **{s.get('module_code', 'A_DETERMINISTIC')}**")
 
+        # Mostrar módulo
+        if s.get("module_id"):
+            mod = get_module_by_id(s["module_id"])
+            if mod:
+                st.write(f"- Módulo: **{mod['module_code']}** — {mod['id']}")
+
+        # Mostrar producto
         product = get_product(s["product_id"])
         if product:
-            st.write(f"- Producto: **{product['name']}** — {product['price']}€")
-            if product.get("image_url"):
-                st.image(product["image_url"], width=200)
+            st.write(f"- Producto: **{product['name']}** – {product['price']}€")
 
-        # Activar sesión
-        if st.button(f"Activar sesión {s['id']}"):
-            activate_session(s["id"])
-            st.success("Sesión activada correctamente")
+        st.write("---")
