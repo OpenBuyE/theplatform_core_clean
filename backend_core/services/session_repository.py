@@ -9,7 +9,6 @@ from backend_core.services.supabase_client import table
 from backend_core.services.audit_repository import log_event
 
 SESSION_TABLE = "ca_sessions"
-PARTICIPANTS_TABLE = "ca_session_participants"
 
 
 # ============================================================
@@ -24,9 +23,12 @@ def create_parked_session(
     capacity: int,
     expires_in_days: int = 5,
     module_code: str = "A_DETERMINISTIC",
+    module_id: Optional[str] = None,
 ) -> Dict:
     """
-    Crea una sesión en estado 'parked'
+    Crea una sesión en estado 'parked'.
+
+    Ahora soporta module_id (relación con ca_modules).
     """
 
     expires_at = datetime.utcnow() + timedelta(days=expires_in_days)
@@ -43,6 +45,7 @@ def create_parked_session(
         "expires_at": expires_at.isoformat(),
         "finished_at": None,
         "module_code": module_code,
+        "module_id": module_id,
     }
 
     resp = table(SESSION_TABLE).insert(data).execute()
@@ -106,18 +109,21 @@ def increment_pax(session_id: str) -> None:
     Incrementa pax_registered en +1
     """
 
-    # Obtener valor actual
     s = get_session_by_id(session_id)
     new_value = s["pax_registered"] + 1
 
-    resp = (
+    (
         table(SESSION_TABLE)
         .update({"pax_registered": new_value})
         .eq("id", session_id)
         .execute()
     )
 
-    log_event("pax_incremented", session_id=session_id, metadata={"new_value": new_value})
+    log_event(
+        "pax_incremented",
+        session_id=session_id,
+        metadata={"new_value": new_value},
+    )
 
 
 def finish_session(session_id: str) -> Dict:
@@ -143,7 +149,7 @@ def finish_session(session_id: str) -> Dict:
 
 def get_next_session_in_series(series_id: str, after_sequence: int) -> Optional[Dict]:
     """
-    Devuelve la siguiente sesión en una serie
+    Devuelve la siguiente sesión en una serie.
     """
 
     resp = (
