@@ -2,72 +2,52 @@
 
 from __future__ import annotations
 
-from typing import List, Optional, Dict, Any
-from datetime import datetime
+from typing import List, Dict, Optional
+from uuid import uuid4
 
-from backend_core.services.supabase_client import table
+from backend_core.services import supabase_client
 from backend_core.services.audit_repository import log_event
 
-
 MODULES_TABLE = "ca_modules"
-BATCHES_TABLE = "ca_module_batches"
 
 
 # ============================================================
 # CREATE MODULE
 # ============================================================
 
-def create_module(
-    product_id: str,
-    module_code: str,
-    organization_id: str,
-    batch_id: Optional[str] = None,
-) -> Dict[str, Any]:
+def create_module(module_code: str, config: Dict = None) -> Dict:
+    row = {
+        "id": str(uuid4()),
+        "module_code": module_code,
+        "config": config or {},
+        "has_award": False,
+        "module_status": "active",
+    }
 
-    now = datetime.utcnow().isoformat()
+    resp = supabase_client.table(MODULES_TABLE).insert(row).execute()
+    log_event("module_created", metadata=row)
 
-    resp = (
-        table(MODULES_TABLE)
-        .insert(
-            {
-                "product_id": product_id,
-                "module_code": module_code,
-                "organization_id": organization_id,
-                "batch_id": batch_id,
-                "module_status": "pending",
-                "has_award": None,
-                "created_at": now,
-            }
-        )
-        .execute()
-    )
-
-    module = resp.data[0]
-
-    log_event(
-        "module_created",
-        session_id=None,
-        metadata={
-            "module_id": module["id"],
-            "module_code": module_code,
-            "product_id": product_id,
-            "organization_id": organization_id,
-            "batch_id": batch_id,
-        },
-    )
-
-    return module
+    return resp.data[0]
 
 
 # ============================================================
-# GET MODULE BY ID
+# LIST ALL MODULES
 # ============================================================
 
-def get_module_by_id(module_id: str) -> Optional[Dict[str, Any]]:
+def list_all_modules() -> List[Dict]:
+    resp = supabase_client.table(MODULES_TABLE).select("*").order("module_code").execute()
+    return resp.data or []
+
+
+# ============================================================
+# GET MODULE FOR SESSION
+# ============================================================
+
+def get_module_for_session(session_id: str) -> Optional[Dict]:
     resp = (
-        table(MODULES_TABLE)
+        supabase_client.table(MODULES_TABLE)
         .select("*")
-        .eq("id", module_id)
+        .eq("session_id", session_id)
         .single()
         .execute()
     )
@@ -75,132 +55,19 @@ def get_module_by_id(module_id: str) -> Optional[Dict[str, Any]]:
 
 
 # ============================================================
-# LIST MODULES
-# ============================================================
-
-def list_all_modules() -> List[Dict[str, Any]]:
-    resp = (
-        table(MODULES_TABLE)
-        .select("*")
-        .order("created_at")
-        .execute()
-    )
-    return resp.data or []
-
-
-def get_modules_by_product(product_id: str) -> List[Dict[str, Any]]:
-    resp = (
-        table(MODULES_TABLE)
-        .select("*")
-        .eq("product_id", product_id)
-        .order("created_at")
-        .execute()
-    )
-    return resp.data or []
-
-
-def get_modules_by_batch(batch_id: str) -> List[Dict[str, Any]]:
-    resp = (
-        table(MODULES_TABLE)
-        .select("*")
-        .eq("batch_id", batch_id)
-        .order("created_at")
-        .execute()
-    )
-    return resp.data or []
-
-
-def list_archived_modules() -> List[Dict[str, Any]]:
-    resp = (
-        table(MODULES_TABLE)
-        .select("*")
-        .eq("module_status", "archived")
-        .order("archived_at", desc=True)
-        .execute()
-    )
-    return resp.data or []
-
-
-def list_cancelled_modules() -> List[Dict[str, Any]]:
-    resp = (
-        table(MODULES_TABLE)
-        .select("*")
-        .eq("module_status", "cancelled")
-        .order("created_at")
-        .execute()
-    )
-    return resp.data or []
-
-
-def list_no_award_modules() -> List[Dict[str, Any]]:
-    resp = (
-        table(MODULES_TABLE)
-        .select("*")
-        .eq("module_status", "no_award")
-        .order("created_at")
-        .execute()
-    )
-    return resp.data or []
-
-
-# ============================================================
-# UPDATE STATUS
-# ============================================================
-
-def update_module_status(module_id: str, status: str) -> Optional[Dict[str, Any]]:
-    now = datetime.utcnow().isoformat()
-
-    update_data = {
-        "module_status": status,
-        "updated_at": now,
-    }
-
-    if status == "archived":
-        update_data["archived_at"] = now
-
-    resp = (
-        table(MODULES_TABLE)
-        .update(update_data)
-        .eq("id", module_id)
-        .execute()
-    )
-
-    data = resp.data[0] if resp.data else None
-
-    log_event(
-        "module_status_updated",
-        session_id=None,
-        metadata={
-            "module_id": module_id,
-            "status": status,
-        },
-    )
-
-    return data
-
-
-# ============================================================
 # ASSIGN MODULE TO SESSION
 # ============================================================
 
-def assign_module_to_session(module_id: str, session_id: str):
+def assign_module(session_id: str, module_id: str):
     resp = (
-        table(MODULES_TABLE)
+        supabase_client.table(MODULES_TABLE)
         .update({"session_id": session_id})
         .eq("id", module_id)
         .execute()
     )
 
-    log_event(
-        "module_assigned_session",
-        session_id=session_id,
-        metadata={
-            "module_id": module_id,
-            "session_id": session_id,
-        },
-    )
-
-    return resp.data[0] if resp.data else None
+    log_event("module_assigned", session_id=session_id, metadata={"module_id": module_id})
+    return resp.data
 
 
 # ============================================================
@@ -208,45 +75,5 @@ def assign_module_to_session(module_id: str, session_id: str):
 # ============================================================
 
 def mark_module_awarded(module_id: str):
-    resp = (
-        table(MODULES_TABLE)
-        .update(
-            {
-                "has_award": True,
-                "module_status": "finished",
-                "awarded_at": datetime.utcnow().isoformat(),
-            }
-        )
-        .eq("id", module_id)
-        .execute()
-    )
-
-    log_event(
-        "module_awarded",
-        session_id=None,
-        metadata={"module_id": module_id},
-    )
-
-    return resp.data[0] if resp.data else None
-
-
-# ============================================================
-# GET MODULE FOR SESSION (LA FUNCIÓN QUE FALTABA)
-# ============================================================
-
-def get_module_for_session(session_id: str) -> Optional[Dict[str, Any]]:
-    """
-    Devuelve el módulo asociado a una sesión usando session.module_id.
-    """
-
-    from backend_core.services.session_repository import get_session_by_id
-
-    session = get_session_by_id(session_id)
-    if not session:
-        return None
-
-    module_id = session.get("module_id")
-    if not module_id:
-        return None
-
-    return get_module_by_id(module_id)
+    supabase_client.table(MODULES_TABLE).update({"has_award": True}).eq("id", module_id).execute()
+    log_event("module_marked_awarded", metadata={"module_id": module_id})
