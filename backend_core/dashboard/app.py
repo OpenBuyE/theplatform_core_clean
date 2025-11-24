@@ -25,6 +25,9 @@ from backend_core.dashboard.views.operator_dashboard_pro import (
 from backend_core.dashboard.views.module_inspector import (
     render_module_inspector,
 )
+from backend_core.dashboard.views.products_browser import (
+    render_products_browser,
+)
 
 
 def main():
@@ -34,7 +37,6 @@ def main():
         initial_sidebar_state="expanded",
     )
 
-    # HEADER LATERAL
     st.sidebar.title("Platform Core — Safe Boot + Pro")
     st.sidebar.caption("Modo estable con vistas Pro nativas")
 
@@ -44,6 +46,7 @@ def main():
             "Module Inspector",
             "Parked Sessions",
             "Active Sessions",
+            "Products Browser",
             "Chains",
             "History",
             "Audit Logs",
@@ -63,6 +66,9 @@ def main():
     elif menu == "Active Sessions":
         render_active_sessions()
 
+    elif menu == "Products Browser":
+        render_products_browser()
+
     elif menu == "Chains":
         render_chains()
 
@@ -79,7 +85,6 @@ def main():
         render_operator_dashboard()
 
     elif menu == "Operator Dashboard Pro":
-        # Versión A: solo widgets nativos, sin dependencias pesadas
         render_operator_dashboard_pro()
 
     elif menu == "Admin Engine":
