@@ -11,6 +11,7 @@ from backend_core.dashboard.views.admin_engine import render_admin_engine
 from backend_core.dashboard.views.admin_seeds import render_admin_seeds
 from backend_core.dashboard.views.admin_users import render_admin_users
 from backend_core.dashboard.views.contract_payment_status import render_contract_payment_status
+from backend_core.dashboard.views.admin_operators_kyc import render_admin_operators_kyc
 
 
 def main():
@@ -20,30 +21,24 @@ def main():
         st.session_state["page"] = "Parked Sessions"
 
     st.sidebar.title("Compra Abierta")
+
+    pages = [
+        "Parked Sessions",
+        "Active Sessions",
+        "Chains",
+        "History",
+        "Audit Logs",
+        "Admin Engine",
+        "Admin Seeds",
+        "Admin Users",
+        "Admin Operators / KYC",
+        "Contract & Payment Status",
+    ]
+
     page = st.sidebar.radio(
         "Panel",
-        [
-            "Parked Sessions",
-            "Active Sessions",
-            "Chains",
-            "History",
-            "Audit Logs",
-            "Admin Engine",
-            "Admin Seeds",
-            "Admin Users",
-            "Contract & Payment Status",
-        ],
-        index=[
-            "Parked Sessions",
-            "Active Sessions",
-            "Chains",
-            "History",
-            "Audit Logs",
-            "Admin Engine",
-            "Admin Seeds",
-            "Admin Users",
-            "Contract & Payment Status",
-        ].index(st.session_state["page"]),
+        pages,
+        index=pages.index(st.session_state["page"]),
     )
 
     st.session_state["page"] = page
@@ -64,6 +59,8 @@ def main():
         render_admin_seeds()
     elif page == "Admin Users":
         render_admin_users()
+    elif page == "Admin Operators / KYC":
+        render_admin_operators_kyc()
     elif page == "Contract & Payment Status":
         render_contract_payment_status()
 
