@@ -2,7 +2,7 @@
 
 import streamlit as st
 
-# Importación de vistas existentes
+# Importación de vistas núcleo
 from backend_core.dashboard.views.park_sessions import render_park_sessions
 from backend_core.dashboard.views.active_sessions import render_active_sessions
 from backend_core.dashboard.views.chains import render_chains
@@ -19,6 +19,9 @@ from backend_core.dashboard.views.contract_payment_status import (
 from backend_core.dashboard.views.operator_dashboard import (
     render_operator_dashboard,
 )
+from backend_core.dashboard.views.operator_dashboard_pro import (
+    render_operator_dashboard_pro,
+)
 from backend_core.dashboard.views.module_inspector import (
     render_module_inspector,
 )
@@ -31,7 +34,9 @@ def main():
         initial_sidebar_state="expanded",
     )
 
-    st.sidebar.title("Platform Core — Safe Boot Mode")
+    # HEADER LATERAL
+    st.sidebar.title("Platform Core — Safe Boot + Pro")
+    st.sidebar.caption("Modo estable con vistas Pro nativas")
 
     menu = st.sidebar.selectbox(
         "Navegación",
@@ -44,8 +49,7 @@ def main():
             "Audit Logs",
             "Contract & Payment Status",
             "Operator Dashboard",
-            # ❌ PRO DASHBOARD REMOVED TEMPORARILY
-            # "Operator Dashboard Pro",
+            "Operator Dashboard Pro",
             "Admin Engine",
             "Admin Seeds",
             "Admin Operators / KYC",
@@ -68,23 +72,27 @@ def main():
     elif menu == "Audit Logs":
         render_audit_logs()
 
-    elif menu == "Admin Engine":
-        render_admin_engine()
-
-    elif menu == "Admin Operators / KYC":
-        render_admin_operators_kyc()
-
     elif menu == "Contract & Payment Status":
         render_contract_payment_status()
 
     elif menu == "Operator Dashboard":
         render_operator_dashboard()
 
-    elif menu == "Module Inspector":
-        render_module_inspector()
+    elif menu == "Operator Dashboard Pro":
+        # Versión A: solo widgets nativos, sin dependencias pesadas
+        render_operator_dashboard_pro()
+
+    elif menu == "Admin Engine":
+        render_admin_engine()
 
     elif menu == "Admin Seeds":
         render_admin_seeds()
+
+    elif menu == "Admin Operators / KYC":
+        render_admin_operators_kyc()
+
+    elif menu == "Module Inspector":
+        render_module_inspector()
 
 
 if __name__ == "__main__":
