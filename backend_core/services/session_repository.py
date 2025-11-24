@@ -5,95 +5,78 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 
-from backend_core.services import supabase_client
-from backend_core.services.audit_repository import AuditRepository
+from backend_core.services.supabase_client import table
+from backend_core.services.audit_repository import log_event
 
 SESSION_TABLE = "ca_sessions"
 PARTICIPANTS_TABLE = "ca_session_participants"
-SERIES_TABLE = "ca_session_series"
 
 
-audit = AuditRepository()
-
-
-# -----------------------------------------------------
-# CREACIÓN Y ACTIVACIÓN DE SESIONES
-# -----------------------------------------------------
+# ============================================================
+#  SESIONES: CRUD BÁSICO + OPERACIONES INTERNAS
+# ============================================================
 
 def create_parked_session(
-    series_id: str,
     product_id: str,
     organization_id: str,
+    series_id: str,
+    sequence_number: int,
     capacity: int,
-    expires_days: int = 5,
+    expires_in_days: int = 5,
+    module_code: str = "A_DETERMINISTIC",
 ) -> Dict:
-    expires_at = datetime.utcnow() + timedelta(days=expires_days)
+    """
+    Crea una sesión en estado 'parked'
+    """
 
-    payload = {
-        "series_id": series_id,
+    expires_at = datetime.utcnow() + timedelta(days=expires_in_days)
+
+    data = {
         "product_id": product_id,
         "organization_id": organization_id,
+        "series_id": series_id,
+        "sequence_number": sequence_number,
         "capacity": capacity,
         "pax_registered": 0,
         "status": "parked",
-        "created_at": datetime.utcnow().isoformat(),
         "activated_at": None,
         "expires_at": expires_at.isoformat(),
         "finished_at": None,
+        "module_code": module_code,
     }
 
-    resp = supabase_client.table(SESSION_TABLE).insert(payload).execute()
-    row = resp.data[0]
+    resp = table(SESSION_TABLE).insert(data).execute()
+    created = resp.data[0]
 
-    audit.log(
-        action="SESSION_CREATED_PARKED",
-        session_id=row["id"],
-        user_id=None,
-        metadata={"series_id": series_id, "capacity": capacity},
-    )
+    log_event("session_created_parked", session_id=created["id"], metadata=data)
 
-    return row
+    return created
 
 
 def activate_session(session_id: str) -> Dict:
+    """
+    Cambia una sesión parked → active
+    """
+
     now = datetime.utcnow().isoformat()
 
     resp = (
-        supabase_client.table(SESSION_TABLE)
+        table(SESSION_TABLE)
         .update({"status": "active", "activated_at": now})
         .eq("id", session_id)
         .execute()
     )
-    row = resp.data[0]
 
-    audit.log(
-        action="SESSION_ACTIVATED",
-        session_id=session_id,
-        user_id=None,
-        metadata={},
-    )
+    updated = resp.data[0]
 
-    return row
+    log_event("session_activated", session_id=session_id)
 
-
-# -----------------------------------------------------
-# CONSULTAS DE SESIONES
-# -----------------------------------------------------
-
-def get_session(session_id: str) -> Optional[Dict]:
-    resp = (
-        supabase_client.table(SESSION_TABLE)
-        .select("*")
-        .eq("id", session_id)
-        .single()
-        .execute()
-    )
-    return resp.data
+    return updated
 
 
 def get_parked_sessions() -> List[Dict]:
     resp = (
-        supabase_client.table(SESSION_TABLE)
+        table(SESSION_TABLE)
         .select("*")
         .eq("status", "parked")
         .order("created_at")
@@ -104,7 +87,7 @@ def get_parked_sessions() -> List[Dict]:
 
 def get_active_sessions() -> List[Dict]:
     resp = (
-        supabase_client.table(SESSION_TABLE)
+        table(SESSION_TABLE)
         .select("*")
         .eq("status", "active")
         .order("activated_at")
@@ -113,78 +96,66 @@ def get_active_sessions() -> List[Dict]:
     return resp.data or []
 
 
-# -----------------------------------------------------
-# PARTICIPANTES
-# -----------------------------------------------------
+def get_session_by_id(session_id: str) -> Optional[Dict]:
+    resp = table(SESSION_TABLE).select("*").eq("id", session_id).single().execute()
+    return resp.data
 
-def add_participant(
-    session_id: str,
-    user_id: str,
-    amount: float,
-    price: float,
-    quantity: int,
-    organization_id: str,
-) -> Dict:
 
-    payload = {
-        "session_id": session_id,
-        "user_id": user_id,
-        "organization_id": organization_id,
-        "amount": amount,
-        "price": price,
-        "quantity": quantity,
-        "is_awarded": False,
-        "created_at": datetime.utcnow().isoformat(),
-    }
+def increment_pax(session_id: str) -> None:
+    """
+    Incrementa pax_registered en +1
+    """
+
+    # Obtener valor actual
+    s = get_session_by_id(session_id)
+    new_value = s["pax_registered"] + 1
 
     resp = (
-        supabase_client.table(PARTICIPANTS_TABLE)
-        .insert(payload)
+        table(SESSION_TABLE)
+        .update({"pax_registered": new_value})
+        .eq("id", session_id)
         .execute()
     )
 
-    # Update pax_registered
-    supabase_client.table(SESSION_TABLE).update(
-        {"pax_registered": supabase_client.rpc(
-            "increment_session_pax", {"sessionid": session_id}
-        ).execute().data}
-    ).eq("id", session_id).execute()
-
-    audit.log(
-        action="PARTICIPANT_ADDED",
-        session_id=session_id,
-        user_id=user_id,
-        metadata={"amount": amount, "price": price},
-    )
-
-    return resp.data[0]
+    log_event("pax_incremented", session_id=session_id, metadata={"new_value": new_value})
 
 
-def get_participants(session_id: str) -> List[Dict]:
-    resp = (
-        supabase_client.table(PARTICIPANTS_TABLE)
-        .select("*")
-        .eq("session_id", session_id)
-        .order("created_at")
-        .execute()
-    )
-    return resp.data or []
+def finish_session(session_id: str) -> Dict:
+    """
+    Marca una sesión como finalizada (finished)
+    """
 
-
-# -----------------------------------------------------
-# FINALIZACIÓN DE SESIONES
-# -----------------------------------------------------
-
-def finish_session(session_id: str) -> None:
     now = datetime.utcnow().isoformat()
 
-    supabase_client.table(SESSION_TABLE).update(
-        {"status": "finished", "finished_at": now}
-    ).eq("id", session_id).execute()
-
-    audit.log(
-        action="SESSION_FINISHED",
-        session_id=session_id,
-        user_id=None,
-        metadata={},
+    resp = (
+        table(SESSION_TABLE)
+        .update({"status": "finished", "finished_at": now})
+        .eq("id", session_id)
+        .execute()
     )
+
+    updated = resp.data[0]
+
+    log_event("session_finished", session_id=session_id)
+
+    return updated
+
+
+def get_next_session_in_series(series_id: str, after_sequence: int) -> Optional[Dict]:
+    """
+    Devuelve la siguiente sesión en una serie
+    """
+
+    resp = (
+        table(SESSION_TABLE)
+        .select("*")
+        .eq("series_id", series_id)
+        .gt("sequence_number", after_sequence)
+        .order("sequence_number")
+        .limit(1)
+        .execute()
+    )
+
+    rows = resp.data or []
+    return rows[0] if rows else None
+
