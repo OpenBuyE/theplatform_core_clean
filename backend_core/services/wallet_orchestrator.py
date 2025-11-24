@@ -12,19 +12,51 @@ from backend_core.services.payment_state_machine import (
     mark_settlement,
     mark_force_majeure_refund,
 )
-from backend_core.services.contract_engine import (
-    on_participant_funded,
-    on_settlement_completed,
-    on_force_majeure_refund,
-)
+from backend_core.services.contract_engine import contract_engine
 from backend_core.services.wallet_events import (
     DepositAuthorizedEvent,
     SettlementExecutedEvent,
     ForceMajeureRefundEvent,
 )
+from backend_core.services.session_repository import get_session_by_id
+from backend_core.services.module_repository import get_session_module
 
 
 audit = AuditRepository()
+
+
+# ======================================================
+# UTILIDAD: comprobar módulo
+# ======================================================
+
+def _check_module_allows_fintech(session_id: str) -> (bool, str):
+    """
+    Devuelve (allowed, module_code).
+    Solo A_DETERMINISTIC puede procesar eventos fintech.
+    """
+    session = get_session_by_id(session_id)
+    if not session:
+        audit.log(
+            action="FINTECH_EVENT_SESSION_NOT_FOUND",
+            session_id=session_id,
+            user_id=None,
+            metadata={},
+        )
+        return False, "UNKNOWN"
+
+    module = get_session_module(session)
+    module_code = module["module_code"]
+
+    if module_code != "A_DETERMINISTIC":
+        audit.log(
+            action="FINTECH_EVENT_BLOCKED_BY_MODULE",
+            session_id=session_id,
+            user_id=None,
+            metadata={"module": module_code},
+        )
+        return False, module_code
+
+    return True, module_code
 
 
 # ======================================================
@@ -49,15 +81,25 @@ def handle_deposit_authorized(payload: Dict[str, Any]) -> Dict[str, Any]:
         raw_payload=payload,
     )
 
+    allowed, module_code = _check_module_allows_fintech(event.session_id)
+    if not allowed:
+        return {
+            "handled": False,
+            "blocked_by_module": module_code,
+            "event": "deposit_authorized",
+        }
+
     # 1) Actualizar PaymentSession (total_deposited_amount)
     update_payment_deposit(event.session_id, event.amount)
 
-    # 2) Registrar evento en ContractEngine (puede disparar GROUP_FUNDED)
-    on_participant_funded(
-        session_id=event.session_id,
-        user_id=event.user_id,
-        amount=event.amount,
-        fintech_operation_id=event.fintech_operation_id,
+    # 2) Notificar al ContractEngine (DEPOSITS_OK)
+    contract_engine.on_participant_funded(
+        event.session_id,
+        {
+            "user_id": event.user_id,
+            "amount": event.amount,
+            "fintech_operation_id": event.fintech_operation_id,
+        },
     )
 
     # 3) Auditoría
@@ -69,6 +111,7 @@ def handle_deposit_authorized(payload: Dict[str, Any]) -> Dict[str, Any]:
             "amount": event.amount,
             "fintech_operation_id": event.fintech_operation_id,
             "raw": event.raw_payload,
+            "module": module_code,
         },
     )
 
@@ -97,15 +140,25 @@ def handle_settlement_executed(payload: Dict[str, Any]) -> Dict[str, Any]:
         raw_payload=payload,
     )
 
+    allowed, module_code = _check_module_allows_fintech(event.session_id)
+    if not allowed:
+        return {
+            "handled": False,
+            "blocked_by_module": module_code,
+            "event": "settlement_executed",
+        }
+
     # 1) Actualizar PaymentSession a SETTLED
     mark_settlement(event.session_id)
 
     # 2) Notificar al ContractEngine
-    on_settlement_completed(
-        session_id=event.session_id,
-        provider_id=event.provider_id,
-        amount=event.amount,
-        fintech_operation_id=event.fintech_operation_id,
+    contract_engine.on_settlement_completed(
+        event.session_id,
+        {
+            "provider_id": event.provider_id,
+            "amount": event.amount,
+            "fintech_operation_id": event.fintech_operation_id,
+        },
     )
 
     # 3) Auditoría
@@ -118,6 +171,7 @@ def handle_settlement_executed(payload: Dict[str, Any]) -> Dict[str, Any]:
             "amount": event.amount,
             "fintech_operation_id": event.fintech_operation_id,
             "raw": event.raw_payload,
+            "module": module_code,
         },
     )
 
@@ -146,15 +200,25 @@ def handle_force_majeure_refund(payload: Dict[str, Any]) -> Dict[str, Any]:
         raw_payload=payload,
     )
 
+    allowed, module_code = _check_module_allows_fintech(event.session_id)
+    if not allowed:
+        return {
+            "handled": False,
+            "blocked_by_module": module_code,
+            "event": "force_majeure_refund",
+        }
+
     # 1) Actualizar PaymentSession a FORCE_MAJEURE
     mark_force_majeure_refund(event.session_id)
 
     # 2) Notificar ContractEngine
-    on_force_majeure_refund(
-        session_id=event.session_id,
-        adjudicatario_user_id=event.adjudicatario_user_id,
-        amount_refunded=event.amount_refunded,
-        fintech_operation_id=event.fintech_operation_id,
+    contract_engine.on_force_majeure_refund(
+        event.session_id,
+        {
+            "adjudicatario_user_id": event.adjudicatario_user_id,
+            "amount_refunded": event.amount_refunded,
+            "fintech_operation_id": event.fintech_operation_id,
+        },
     )
 
     # 3) Auditoría
@@ -166,7 +230,12 @@ def handle_force_majeure_refund(payload: Dict[str, Any]) -> Dict[str, Any]:
             "amount_refunded": event.amount_refunded,
             "fintech_operation_id": event.fintech_operation_id,
             "raw": event.raw_payload,
+            "module": module_code,
         },
     )
 
     return {"handled": True, "event": "force_majeure_refund"}
+
+
+# Solo para compatibilidad con imports existentes (no se usa directamente)
+wallet_orchestrator = None
