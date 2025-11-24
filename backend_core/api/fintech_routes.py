@@ -1,115 +1,126 @@
 # backend_core/api/fintech_routes.py
+
 from __future__ import annotations
 
-from datetime import datetime
+from fastapi import APIRouter, HTTPException, Request
 
-from fastapi import APIRouter, Depends, Request, status
-
-from backend_core.api.deps import get_wallet_orchestrator
-from backend_core.services.wallet_orchestrator import WalletOrchestrator
-from backend_core.services.wallet_events import (
-    DepositOkEvent,
-    SettlementCompletedEvent,
-    ForceMajeureRefundEvent,
+from backend_core.services.wallet_orchestrator import (
+    handle_deposit_authorized,
+    handle_settlement_executed,
+    handle_force_majeure_refund,
 )
+from backend_core.services.audit_repository import AuditRepository
+
 
 router = APIRouter(prefix="/fintech", tags=["fintech"])
 
+audit = AuditRepository()
 
-@router.post("/deposit-ok", status_code=status.HTTP_200_OK)
-async def deposit_ok(
-    request: Request,
-    orchestrator: WalletOrchestrator = Depends(get_wallet_orchestrator),
-):
+
+# ======================================================
+# /fintech/deposit-ok
+# ======================================================
+
+@router.post("/deposit-ok")
+async def fintech_deposit_ok(request: Request):
     """
-    Webhook: confirmación de depósito autorizado por la Fintech.
-    El payload (ejemplo) podría ser:
+    Webhook que confirma un depósito de un participante.
+    El payload esperado mínimo:
     {
-        "operation_id": "fintx_123",
-        "session_id": "uuid-session",
-        "user_id": "user-123",
+        "session_id": "...",
+        "user_id": "...",
         "amount": 25.0,
-        "currency": "EUR",
-        ...
+        "fintech_operation_id": "trx_123..."
     }
     """
-    payload = await request.json()
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON payload")
 
-    event = DepositOkEvent(
-        fintech_operation_id=payload["operation_id"],
-        session_id=payload["session_id"],
-        user_id=payload["user_id"],
-        amount=float(payload["amount"]),
-        currency=payload.get("currency", "EUR"),
-        raw_payload=payload,
-        received_at=datetime.utcnow(),
+    if "session_id" not in payload or "user_id" not in payload:
+        raise HTTPException(400, "Missing required fields")
+
+    result = handle_deposit_authorized(payload)
+
+    # Auditoría cruda de webhook recibido
+    audit.log(
+        action="FINTECH_WEBHOOK_DEPOSIT_OK",
+        session_id=payload.get("session_id"),
+        user_id=payload.get("user_id"),
+        metadata=payload,
     )
 
-    orchestrator.handle_deposit_ok(event)
-    return {"status": "ok"}
+    return {"status": "ok", "handled": result}
 
 
-@router.post("/settlement", status_code=status.HTTP_200_OK)
-async def settlement(
-    request: Request,
-    orchestrator: WalletOrchestrator = Depends(get_wallet_orchestrator),
-):
+# ======================================================
+# /fintech/settlement
+# ======================================================
+
+@router.post("/settlement")
+async def fintech_settlement(request: Request):
     """
-    Webhook: confirmación de pago al proveedor.
-    Payload (ejemplo):
+    Webhook que confirma el settlement al proveedor.
+    Payload mínimo:
     {
-        "operation_id": "finset_456",
-        "session_id": "uuid-session",
-        "provider_id": "prov-789",
+        "session_id": "...",
+        "provider_id": "...",
         "amount": 100.0,
-        "currency": "EUR",
-        ...
+        "fintech_operation_id": "settle_456..."
     }
     """
-    payload = await request.json()
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON payload")
 
-    event = SettlementCompletedEvent(
-        fintech_operation_id=payload["operation_id"],
-        session_id=payload["session_id"],
-        provider_id=payload["provider_id"],
-        amount=float(payload["amount"]),
-        currency=payload.get("currency", "EUR"),
-        raw_payload=payload,
-        received_at=datetime.utcnow(),
+    if "session_id" not in payload or "provider_id" not in payload:
+        raise HTTPException(400, "Missing required fields")
+
+    result = handle_settlement_executed(payload)
+
+    audit.log(
+        action="FINTECH_WEBHOOK_SETTLEMENT",
+        session_id=payload.get("session_id"),
+        user_id=None,
+        metadata=payload,
     )
 
-    orchestrator.handle_settlement_completed(event)
-    return {"status": "ok"}
+    return {"status": "ok", "handled": result}
 
 
-@router.post("/force-majeure-refund", status_code=status.HTTP_200_OK)
-async def force_majeure_refund(
-    request: Request,
-    orchestrator: WalletOrchestrator = Depends(get_wallet_orchestrator),
-):
+# ======================================================
+# /fintech/force-majeure-refund
+# ======================================================
+
+@router.post("/force-majeure-refund")
+async def fintech_force_majeure_refund(request: Request):
     """
-    Webhook: reembolso por fuerza mayor.
-    Payload (ejemplo):
+    Webhook que confirma un reembolso por fuerza mayor.
+    Payload mínimo:
     {
-        "operation_id": "finfm_789",
-        "session_id": "uuid-session",
-        "adjudicatario_user_id": "user-999",
-        "amount_refunded": 80.0,
-        "currency": "EUR",
-        ...
+        "session_id": "...",
+        "adjudicatario_user_id": "...",
+        "amount_refunded": 75.0,
+        "fintech_operation_id": "refund_789..."
     }
     """
-    payload = await request.json()
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON payload")
 
-    event = ForceMajeureRefundEvent(
-        fintech_operation_id=payload["operation_id"],
-        session_id=payload["session_id"],
-        adjudicatario_user_id=payload["adjudicatario_user_id"],
-        amount_refunded=float(payload["amount_refunded"]),
-        currency=payload.get("currency", "EUR"),
-        raw_payload=payload,
-        received_at=datetime.utcnow(),
+    if "session_id" not in payload or "adjudicatario_user_id" not in payload:
+        raise HTTPException(400, "Missing required fields")
+
+    result = handle_force_majeure_refund(payload)
+
+    audit.log(
+        action="FINTECH_WEBHOOK_FORCE_MAJEURE",
+        session_id=payload.get("session_id"),
+        user_id=payload.get("adjudicatario_user_id"),
+        metadata=payload,
     )
 
-    orchestrator.handle_force_majeure_refund(event)
-    return {"status": "ok"}
+    return {"status": "ok", "handled": result}
