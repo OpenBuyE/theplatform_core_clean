@@ -1,129 +1,112 @@
 # backend_core/services/adjudicator_engine.py
 
 from __future__ import annotations
-from typing import Dict, Any, Optional
+
 import hashlib
-import json
 from datetime import datetime
+from typing import Dict, Optional, List
 
 from backend_core.services.audit_repository import log_event
 from backend_core.services.session_repository import (
     get_session_by_id,
-    get_participants_for_session,
-    mark_session_finished,
-    set_participant_awarded,
+    finish_session,
 )
-from backend_core.services.module_repository import get_session_module
-from backend_core.services.session_engine import check_and_trigger_rolling
+from backend_core.services.participant_repository import (
+    get_participants_for_session,
+    mark_awarded,
+)
+from backend_core.services.session_engine import session_engine
 from backend_core.services.contract_engine import contract_engine
+from backend_core.services.module_repository import get_session_module
 
 
 class AdjudicatorEngine:
-    """
-    Motor determinista de adjudicación.
-    Ahora integrado con el sistema de módulos:
-    - Solo adjudica si module_code = A_DETERMINISTIC
-    """
 
-    # ------------------------------------------------------
-    # Punto de entrada principal
-    # ------------------------------------------------------
-    def execute_adjudication(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Ejecuta adjudicación determinista:
-        - Solo si módulo = A_DETERMINISTIC
-        - No re-ejecuta adjudicación si la sesión no está active o ya finished
-        """
+    # ============================================================
+    #  EJECUTAR ADJUDICACIÓN COMPLETA
+    # ============================================================
+
+    def execute_adjudication(self, session_id: str) -> Optional[Dict]:
 
         session = get_session_by_id(session_id)
         if not session:
-            raise ValueError(f"Session '{session_id}' not found")
+            raise ValueError("Session not found")
 
-        # --------------------------------------------------
-        # VALIDAR MÓDULO
-        # --------------------------------------------------
+        # Verificar módulo
         module = get_session_module(session)
+
         if module["module_code"] != "A_DETERMINISTIC":
-            log_event(
-                "adjudication_blocked_by_module",
-                session_id,
-                metadata={"module": module["module_code"]},
+            raise ValueError(
+                f"Este módulo ({module['module_code']}) NO permite adjudicación"
             )
-            return None  # adjudicación bloqueada
 
+        # Solo adjudicamos sesiones activas
         if session["status"] != "active":
-            log_event("adjudication_invalid_status", session_id, metadata={"status": session["status"]})
-            return None
+            raise ValueError("Session must be active to adjudicate")
 
-        # --------------------------------------------------
-        # REQUERIR LISTA DE PARTICIPANTES
-        # --------------------------------------------------
         participants = get_participants_for_session(session_id)
+        if len(participants) == 0:
+            raise ValueError("No participants registered")
 
-        if not participants or len(participants) < session["capacity"]:
-            log_event(
-                "adjudication_blocked_insufficient_pax",
-                session_id,
-                metadata={"pax": len(participants), "capacity": session["capacity"]},
-            )
-            return None
+        if len(participants) < session["capacity"]:
+            raise ValueError("Aforo incompleto, no se puede adjudicar")
 
-        # --------------------------------------------------
-        # CONSTRUIR SEED DETERMINISTA
-        # --------------------------------------------------
-        adjudication_seed = self._build_deterministic_seed(session, participants)
-        adjudication_hash = hashlib.sha256(adjudication_seed.encode()).hexdigest()
+        # ============================================================
+        # 1) Construcción de la semilla determinista
+        # ============================================================
 
-        index = int(adjudication_hash, 16) % len(participants)
-        awarded = participants[index]
+        seed_data = (
+            session_id
+            + session["series_id"]
+            + str(session["sequence_number"])
+            + "".join([p["id"] for p in participants])
+        )
 
-        # --------------------------------------------------
-        # MARCAR PARTICIPANTE COMO ADJUDICADO
-        # --------------------------------------------------
-        set_participant_awarded(awarded["id"])
+        seed_hash = hashlib.sha256(seed_data.encode()).hexdigest()
 
-        mark_session_finished(session_id, finished_status="finished")
+        # Índice ganador determinista
+        winner_index = int(seed_hash, 16) % len(participants)
+        winner = participants[winner_index]
 
+        # ============================================================
+        # 2) Marcar adjudicatario
+        # ============================================================
+
+        mark_awarded(session_id, winner["id"])
         log_event(
-            "session_adjudicated",
-            session_id,
+            "session_awarded",
+            session_id=session_id,
             metadata={
-                "awarded_participant": awarded["id"],
-                "hash": adjudication_hash,
-                "used_seed": adjudication_seed,
+                "winner_participant_id": winner["id"],
+                "seed_hash": seed_hash,
+                "winner_index": winner_index,
             },
         )
 
-        # --------------------------------------------------
-        # TRIGGER CONTRACT ENGINE (solo módulo A)
-        # --------------------------------------------------
-        contract_engine.on_session_awarded(session_id, awarded["id"])
+        # ============================================================
+        # 3) Finalizar sesión
+        # ============================================================
 
-        # --------------------------------------------------
-        # ROLLING (solo módulo A)
-        # --------------------------------------------------
-        return check_and_trigger_rolling(session)
+        finish_session(session_id)
 
-    # ------------------------------------------------------
-    # Construcción de la semilla determinista
-    # ------------------------------------------------------
-    def _build_deterministic_seed(self, session: Dict[str, Any], participants: list) -> str:
-        """
-        Construye la semilla determinista oficial:
-        SHA256(session_id + series_id + sequence_number + participantes + public_seed)
-        """
+        # ============================================================
+        # 4) Ejecutar motor contractual
+        # ============================================================
 
-        participants_sorted = sorted([p["id"] for p in participants])
+        contract_engine.start_contract(session_id)
 
-        data = {
-            "session_id": session["id"],
-            "series_id": session["series_id"],
-            "sequence_number": session["sequence_number"],
-            "participants": participants_sorted,
-            "public_seed": session.get("public_seed") or "",
+        # ============================================================
+        # 5) Rolling: activar siguiente sesión
+        # ============================================================
+
+        session_engine.process_rolling(session)
+
+        return {
+            "winner": winner,
+            "seed_hash": seed_hash,
+            "winner_index": winner_index,
         }
 
-        return json.dumps(data, sort_keys=True)
 
-
+# Instancia global
 adjudicator_engine = AdjudicatorEngine()
