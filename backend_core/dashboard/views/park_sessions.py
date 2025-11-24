@@ -9,118 +9,92 @@ from backend_core.services.session_repository import (
     get_parked_sessions,
 )
 from backend_core.services.audit_repository import log_event
-from backend_core.services.product_repository import list_products, get_product
+from backend_core.services.product_repository import (
+    list_products,
+    get_product,
+)
 from backend_core.services.module_repository import (
     list_all_modules,
-    assign_module_to_session,
+    assign_module,
 )
-from backend_core.services.module_repository import get_module_by_id
 
 
 # =======================================================
-# VISTA PARKED SESSIONS
+# PARKED SESSIONS VIEW
 # =======================================================
 
 def render_park_sessions():
-
     st.header("Parked Sessions")
 
-    # =============================
-    # 1. Selección de producto
-    # =============================
+    # -------------------------------------------------------
+    # FORM: CREATE NEW PARKED SESSION
+    # -------------------------------------------------------
+    st.subheader("Crear nueva sesión aparcada")
+
     products = list_products()
-    product_map = {p["name"]: p["id"] for p in products}
-    product_names = list(product_map.keys())
-
-    if not products:
-        st.warning("No hay productos disponibles.")
-        return
-
-    selected_product = st.selectbox("Producto", product_names)
-    product_id = product_map[selected_product]
-
-    st.write("---")
-
-    # =============================
-    # 2. Selección de módulo
-    # =============================
     modules = list_all_modules()
-    if not modules:
-        st.warning("No hay módulos creados.")
-        return
 
-    module_options = {
-        f"{m['module_code']} — {m['id'][0:8]}": m["id"] for m in modules
-    }
+    # PRODUCT DROPDOWN
+    product_options = {p["name"]: p["id"] for p in products} if products else {}
 
-    selected_module_label = st.selectbox("Módulo asociado", list(module_options.keys()))
-    selected_module_id = module_options[selected_module_label]
+    selected_product_name = st.selectbox("Producto", list(product_options.keys()))
+    selected_product_id = product_options[selected_product_name]
 
-    st.write("---")
+    # MODULE DROPDOWN
+    module_options = {m["module_code"]: m["id"] for m in modules} if modules else {}
 
-    # =============================
-    # 3. Parámetros de sesión
-    # =============================
-    capacity = st.number_input("Capacity", value=10, min_value=1)
-    expires_in_days = st.number_input("Expiración (días)", value=5, min_value=1)
+    selected_module_code = st.selectbox("Módulo", list(module_options.keys()))
+    selected_module_id = module_options[selected_module_code]
 
-    st.write("---")
+    capacity = st.number_input("Capacidad", min_value=1, max_value=500, value=10)
 
-    # =============================
-    # 4. Crear sesión parked
-    # =============================
-    if st.button("Crear sesión PARKED"):
-
-        # Crear serie y sesiones corresponde a module_factory.
-        # Aquí solo estamos creando sesiones manuales para debug.
-        now = datetime.utcnow()
-
-        # sequence_number fijo para debug (NO producción)
-        sequence_number = 1  
-
+    if st.button("Crear sesión aparcada"):
         session = create_parked_session(
-            product_id=product_id,
-            organization_id="00000000-0000-0000-0000-000000000001",
-            series_id="DEBUG_SERIES",
-            sequence_number=sequence_number,
+            product_id=selected_product_id,
             capacity=capacity,
-            expires_in_days=expires_in_days,
-            module_code="A_DETERMINISTIC",
-            module_id=selected_module_id,
         )
 
-        log_event("parked_session_created_manual", session_id=session["id"])
+        # Asignar módulo automáticamente
+        assign_module(session["id"], selected_module_id)
 
-        st.success(f"Sesión parked creada: {session['id']}")
+        log_event(
+            "parked_session_created",
+            session_id=session["id"],
+            metadata={"product_id": selected_product_id, "module_id": selected_module_id},
+        )
 
-    st.write("---")
+        st.success(f"Sesión creada con ID {session['id']} y módulo asignado.")
 
-    # =============================
-    # 5. Mostrar parked existentes
-    # =============================
-    st.subheader("Sesiones PARKED existentes")
+    st.write("----")
+
+    # -------------------------------------------------------
+    # LISTA DE SESIONES APARCADAS
+    # -------------------------------------------------------
+    st.subheader("Sesiones aparcadas")
 
     parked = get_parked_sessions()
-
     if not parked:
-        st.info("No hay sesiones parked.")
+        st.info("No hay sesiones aparcadas.")
         return
 
     for s in parked:
-        st.write(f"### Sesión {s['id']}")
-        st.write(f"- Estado: {s['status']}")
-        st.write(f"- Aforo: {s['pax_registered']} / {s['capacity']}")
-        st.write(f"- Expira: {s['expires_at']}")
+        st.write("----")
+        st.write(f"**Session ID:** {s['id']}")
+        st.write(f"Capacidad: {s['capacity']}")
+        st.write(f"Pax registrados: {s['pax_registered']}")
 
-        # Mostrar módulo
-        if s.get("module_id"):
-            mod = get_module_by_id(s["module_id"])
-            if mod:
-                st.write(f"- Módulo: **{mod['module_code']}** — {mod['id']}")
-
-        # Mostrar producto
+        # Producto
         product = get_product(s["product_id"])
         if product:
-            st.write(f"- Producto: **{product['name']}** – {product['price']}€")
+            st.write(f"Producto: **{product['name']}** — {product['price']}€")
 
-        st.write("---")
+            if product.get("image_url"):
+                st.image(product["image_url"], width=150)
+
+        # Módulo asignado
+        st.write(f"Módulo asignado: {s.get('module_id', 'N/A')}")
+
+        # ACTIVAR
+        if st.button(f"Activar sesión {s['id']}"):
+            activate_session(s["id"])
+            st.success(f"Sesión {s['id']} activada.")
