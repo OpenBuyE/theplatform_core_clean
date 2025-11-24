@@ -1,78 +1,115 @@
-"""
-participant_repository.py
-Repositorio seguro para gestión de participantes.
-"""
+# backend_core/services/participant_repository.py
+
+from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 
-from .supabase_client import supabase
-from .audit_repository import log_event
+from backend_core.services.supabase_client import table
+from backend_core.services.audit_repository import log_event
 
-PARTICIPANT_TABLE = "ca_session_participants"
-
-
-class ParticipantRepository:
-
-    # ---------------------------------------------------------
-    # Obtener participantes de una sesión
-    # ---------------------------------------------------------
-    def get_participants_by_session(self, session_id: str) -> List[Dict]:
-        response = (
-            supabase.table(PARTICIPANT_TABLE)
-            .select("*")
-            .eq("session_id", session_id)
-            .order("created_at")
-            .execute()
-        )
-        return response.data or []
-
-    # ---------------------------------------------------------
-    # Añadir participante de prueba (ONLY TEST)
-    # ---------------------------------------------------------
-    def add_test_participant(self, session: Dict):
-        """
-        Recibe el dict completo de la sesión.
-        Con esto evitamos errores por índices incorrectos.
-        """
-
-        session_id = session["id"]
-        organization_id = session["organization_id"]
-        index = (session.get("pax_registered") or 0) + 1
-
-        now = datetime.utcnow().isoformat()
-
-        payload = {
-            "session_id": session_id,
-            "user_id": f"TEST-USER-{index}",
-            "organization_id": organization_id,
-            "amount": 0,
-            "price": 0,
-            "quantity": 1,
-            "is_awarded": False,
-            "created_at": now,
-        }
-
-        response = supabase.table(PARTICIPANT_TABLE).insert(payload).execute()
-
-        if not response.data:
-            log_event(
-                action="test_participant_insert_error",
-                session_id=session_id,
-                metadata={"payload": payload}
-            )
-            return None
-
-        inserted = response.data[0]
-
-        log_event(
-            action="test_participant_added",
-            session_id=session_id,
-            user_id=inserted["user_id"]
-        )
-
-        return inserted
+PARTICIPANTS_TABLE = "ca_session_participants"
 
 
-# Instancia global
-participant_repository = ParticipantRepository()
+# ============================================================
+#  CREAR PARTICIPANTE (GENERAL)
+# ============================================================
+
+def add_participant(
+    session_id: str,
+    user_id: str,
+    amount: float,
+    price: float,
+    quantity: int = 1,
+    organization_id: Optional[str] = None,
+) -> Dict:
+    """
+    Inserta un nuevo participante en la sesión.
+    """
+
+    data = {
+        "session_id": session_id,
+        "user_id": user_id,
+        "amount": amount,
+        "price": price,
+        "quantity": quantity,
+        "organization_id": organization_id,
+        "is_awarded": False,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+
+    resp = table(PARTICIPANTS_TABLE).insert(data).execute()
+    row = resp.data[0]
+
+    log_event(
+        "participant_added",
+        session_id=session_id,
+        user_id=user_id,
+        metadata=data,
+    )
+
+    return row
+
+
+# ============================================================
+#  PARTICIPANTE DE TEST (USADO POR DASHBOARD)
+# ============================================================
+
+def add_test_participant(
+    session_id: str,
+    user_id: str = "test-user",
+    amount: float = 1.0,
+    price: float = 1.0,
+    quantity: int = 1,
+) -> Dict:
+    """
+    Crea un participante de prueba sin pasar por MangoPay.
+    Esto se usa exclusivamente en el panel administrador.
+    """
+
+    return add_participant(
+        session_id=session_id,
+        user_id=user_id,
+        amount=amount,
+        price=price,
+        quantity=quantity,
+    )
+
+
+# ============================================================
+#  OBTENER PARTICIPANTES DE UNA SESIÓN
+# ============================================================
+
+def get_participants_for_session(session_id: str) -> List[Dict]:
+    resp = (
+        table(PARTICIPANTS_TABLE)
+        .select("*")
+        .eq("session_id", session_id)
+        .order("created_at")
+        .execute()
+    )
+    return resp.data or []
+
+
+# ============================================================
+#  MARCAR GANADOR / ADJUDICATARIO
+# ============================================================
+
+def mark_awarded(session_id: str, participant_id: str) -> None:
+    """
+    Marca un participante como adjudicatario.
+    """
+
+    resp = (
+        table(PARTICIPANTS_TABLE)
+        .update({"is_awarded": True})
+        .eq("id", participant_id)
+        .eq("session_id", session_id)
+        .execute()
+    )
+
+    log_event(
+        "participant_awarded",
+        session_id=session_id,
+        metadata={"participant_id": participant_id},
+    )
