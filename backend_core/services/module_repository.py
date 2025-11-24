@@ -1,79 +1,118 @@
 # backend_core/services/module_repository.py
 
-from __future__ import annotations
-
-from typing import List, Dict, Optional
-from uuid import uuid4
-
-from backend_core.services import supabase_client
+from typing import List, Dict, Any
+from backend_core.services.supabase_client import table
 from backend_core.services.audit_repository import log_event
 
+
 MODULES_TABLE = "ca_modules"
+MODULE_SESSIONS_TABLE = "ca_module_sessions"
 
 
-# ============================================================
-# CREATE MODULE
-# ============================================================
-
-def create_module(module_code: str, config: Dict = None) -> Dict:
-    row = {
-        "id": str(uuid4()),
-        "module_code": module_code,
-        "config": config or {},
-        "has_award": False,
-        "module_status": "active",
-    }
-
-    resp = supabase_client.table(MODULES_TABLE).insert(row).execute()
-    log_event("module_created", metadata=row)
-
-    return resp.data[0]
-
-
-# ============================================================
+# =======================================================
 # LIST ALL MODULES
-# ============================================================
+# =======================================================
 
-def list_all_modules() -> List[Dict]:
-    resp = supabase_client.table(MODULES_TABLE).select("*").order("module_code").execute()
+def list_all_modules() -> List[Dict[str, Any]]:
+    resp = (
+        table(MODULES_TABLE)
+        .select("*")
+        .eq("is_active", True)
+        .execute()
+    )
     return resp.data or []
 
 
-# ============================================================
-# GET MODULE FOR SESSION
-# ============================================================
+# =======================================================
+# ASSIGN MODULE TO SESSION
+# =======================================================
 
-def get_module_for_session(session_id: str) -> Optional[Dict]:
-    resp = (
-        supabase_client.table(MODULES_TABLE)
+def assign_module(session_id: str, module_id: str):
+    """
+    Crea el registro session → module en ca_module_sessions.
+    """
+    _ = (
+        table(MODULE_SESSIONS_TABLE)
+        .insert(
+            {
+                "session_id": session_id,
+                "module_id": module_id,
+            }
+        )
+        .execute()
+    )
+
+    log_event("module_assigned", {"session_id": session_id, "module_id": module_id})
+
+
+# =======================================================
+# GET MODULE FOR SESSION
+# =======================================================
+
+def get_module_for_session(session_id: str) -> Dict[str, Any]:
+    """
+    Devuelve el módulo asignado a una sesión.
+    """
+
+    # primero obtener el registro de asignación
+    rel = (
+        table(MODULE_SESSIONS_TABLE)
         .select("*")
         .eq("session_id", session_id)
         .single()
         .execute()
-    )
-    return resp.data
+    ).data
 
+    if not rel:
+        return None
 
-# ============================================================
-# ASSIGN MODULE TO SESSION
-# ============================================================
+    module_id = rel["module_id"]
 
-def assign_module(session_id: str, module_id: str):
-    resp = (
-        supabase_client.table(MODULES_TABLE)
-        .update({"session_id": session_id})
+    # ahora obtener el módulo real
+    module = (
+        table(MODULES_TABLE)
+        .select("*")
         .eq("id", module_id)
+        .single()
+        .execute()
+    ).data
+
+    return module
+
+
+# =======================================================
+# MARK MODULE AWARDED (solo módulo A)
+# =======================================================
+
+def mark_module_awarded(session_id: str):
+    """
+    Marca que el módulo ha tenido adjudicación (solo Módulo A).
+    """
+    rel = (
+        table(MODULE_SESSIONS_TABLE)
+        .select("*")
+        .eq("session_id", session_id)
+        .single()
+        .execute()
+    ).data
+
+    if not rel:
+        return
+
+    _ = (
+        table(MODULE_SESSIONS_TABLE)
+        .update({"awarded": True})
+        .eq("session_id", session_id)
         .execute()
     )
 
-    log_event("module_assigned", session_id=session_id, metadata={"module_id": module_id})
-    return resp.data
+    log_event("module_awarded", {"session_id": session_id})
 
 
-# ============================================================
-# MARK MODULE AS AWARDED
-# ============================================================
+# =======================================================
+# LIST MODULE ASSIGNMENTS (debug)
+# =======================================================
 
-def mark_module_awarded(module_id: str):
-    supabase_client.table(MODULES_TABLE).update({"has_award": True}).eq("id", module_id).execute()
-    log_event("module_marked_awarded", metadata={"module_id": module_id})
+def list_session_modules() -> List[Dict[str, Any]]:
+    resp = table(MODULE_SESSIONS_TABLE).select("*").execute()
+    return resp.data or []
