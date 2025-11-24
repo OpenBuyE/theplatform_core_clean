@@ -1,169 +1,172 @@
 # backend_core/services/wallet_orchestrator.py
+
 from __future__ import annotations
 
-from datetime import datetime
+from typing import Dict, Any
 
-from backend_core.models.payment_state import (
-    PaymentEvent,
-)
+from backend_core.services.audit_repository import AuditRepository
 from backend_core.services.payment_session_repository import (
-    get_payment_session_by_session_id,
-    save_payment_session,
-    to_state_snapshot,
+    update_payment_deposit,
 )
-from backend_core.services.payment_state_machine import PaymentStateMachine
+from backend_core.services.payment_state_machine import (
+    mark_settlement,
+    mark_force_majeure_refund,
+)
+from backend_core.services.contract_engine import (
+    on_participant_funded,
+    on_settlement_completed,
+    on_force_majeure_refund,
+)
 from backend_core.services.wallet_events import (
-    DepositOkEvent,
-    SettlementCompletedEvent,
+    DepositAuthorizedEvent,
+    SettlementExecutedEvent,
     ForceMajeureRefundEvent,
 )
-from backend_core.services.audit_repository import AuditRepository
-from backend_core.services import contract_engine
 
 
-class WalletOrchestrator:
-    def __init__(self, audit_repo: AuditRepository):
-        self.audit_repo = audit_repo
+audit = AuditRepository()
 
-    # ------------------------------
-    # Helpers internos
-    # ------------------------------
 
-    def _load(self, session_id: str):
-        ps = get_payment_session_by_session_id(session_id)
-        if ps is None:
-            raise ValueError(f"No payment_session found for session {session_id}")
-        return ps
+# ======================================================
+# 1) DEPÓSITO AUTORIZADO
+# ======================================================
 
-    # ------------------------------
-    # Handlers
-    # ------------------------------
+def handle_deposit_authorized(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Orquesta un depósito confirmado por la Fintech.
 
-    def handle_deposit_ok(self, event: DepositOkEvent) -> None:
-        ps = self._load(event.session_id)
+    Espera un payload con al menos:
+    - session_id
+    - user_id
+    - amount
+    - fintech_operation_id
+    """
+    event = DepositAuthorizedEvent(
+        session_id=payload["session_id"],
+        user_id=payload["user_id"],
+        amount=float(payload["amount"]),
+        fintech_operation_id=payload["fintech_operation_id"],
+        raw_payload=payload,
+    )
 
-        # actualizamos el depósito acumulado
-        ps.total_deposited_amount = (ps.total_deposited_amount or 0.0) + event.amount
+    # 1) Actualizar PaymentSession (total_deposited_amount)
+    update_payment_deposit(event.session_id, event.amount)
 
-        snapshot = to_state_snapshot(ps)
-        new_snapshot = PaymentStateMachine.transition(
-            snapshot,
-            PaymentEvent.PARTICIPANT_DEPOSIT_AUTHORIZED,
-        )
+    # 2) Registrar evento en ContractEngine (puede disparar GROUP_FUNDED)
+    on_participant_funded(
+        session_id=event.session_id,
+        user_id=event.user_id,
+        amount=event.amount,
+        fintech_operation_id=event.fintech_operation_id,
+    )
 
-        # Guardamos cambios en la entidad persistente
-        ps.status = new_snapshot.status
-        ps.force_majeure = new_snapshot.force_majeure
-        ps.updated_at = datetime.utcnow()
-        save_payment_session(ps)
+    # 3) Auditoría
+    audit.log(
+        action="FINTECH_DEPOSIT_AUTHORIZED",
+        session_id=event.session_id,
+        user_id=event.user_id,
+        metadata={
+            "amount": event.amount,
+            "fintech_operation_id": event.fintech_operation_id,
+            "raw": event.raw_payload,
+        },
+    )
 
-        # Auditoría
-        self.audit_repo.log(
-            action="DEPOSIT_OK",
-            session_id=event.session_id,
-            user_id=event.user_id,
-            metadata={
-                "amount": event.amount,
-                "ftx_op": event.fintech_operation_id,
-                "raw": event.raw_payload,
-            },
-        )
+    return {"handled": True, "event": "deposit_authorized"}
 
-        # Informar al contract_engine
-        contract_engine.on_participant_funded(
-            session_id=event.session_id,
-            user_id=event.user_id,
-            amount=event.amount,
-            fintech_operation_id=event.fintech_operation_id,
-        )
 
-    # ----------------------------------------
+# ======================================================
+# 2) SETTLEMENT EJECUTADO
+# ======================================================
 
-    def mark_all_deposits_ok(self, session_id: str) -> None:
-        ps = self._load(session_id)
-        snapshot = to_state_snapshot(ps)
+def handle_settlement_executed(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Orquesta un settlement (pago al proveedor) confirmado por la Fintech.
 
-        new_snapshot = PaymentStateMachine.transition(
-            snapshot,
-            PaymentEvent.ALL_DEPOSITS_OK,
-        )
+    Espera:
+    - session_id
+    - provider_id
+    - amount
+    - fintech_operation_id
+    """
+    event = SettlementExecutedEvent(
+        session_id=payload["session_id"],
+        provider_id=payload["provider_id"],
+        amount=float(payload["amount"]),
+        fintech_operation_id=payload["fintech_operation_id"],
+        raw_payload=payload,
+    )
 
-        ps.status = new_snapshot.status
-        ps.updated_at = datetime.utcnow()
-        save_payment_session(ps)
+    # 1) Actualizar PaymentSession a SETTLED
+    mark_settlement(event.session_id)
 
-        self.audit_repo.log(
-            action="ALL_DEPOSITS_OK",
-            session_id=session_id,
-            user_id=None,
-        )
+    # 2) Notificar al ContractEngine
+    on_settlement_completed(
+        session_id=event.session_id,
+        provider_id=event.provider_id,
+        amount=event.amount,
+        fintech_operation_id=event.fintech_operation_id,
+    )
 
-    # ----------------------------------------
+    # 3) Auditoría
+    audit.log(
+        action="FINTECH_SETTLEMENT_EXECUTED",
+        session_id=event.session_id,
+        user_id=None,
+        metadata={
+            "provider_id": event.provider_id,
+            "amount": event.amount,
+            "fintech_operation_id": event.fintech_operation_id,
+            "raw": event.raw_payload,
+        },
+    )
 
-    def handle_settlement_completed(self, event: SettlementCompletedEvent) -> None:
-        ps = self._load(event.session_id)
+    return {"handled": True, "event": "settlement_executed"}
 
-        ps.total_settled_amount = (ps.total_settled_amount or 0.0) + event.amount
 
-        snapshot = to_state_snapshot(ps)
-        new_snapshot = PaymentStateMachine.transition(
-            snapshot,
-            PaymentEvent.SETTLEMENT_CONFIRMED,
-        )
+# ======================================================
+# 3) FORCE MAJEURE REFUND
+# ======================================================
 
-        ps.status = new_snapshot.status
-        ps.updated_at = datetime.utcnow()
-        save_payment_session(ps)
+def handle_force_majeure_refund(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Orquesta un reembolso por fuerza mayor.
 
-        self.audit_repo.log(
-            action="SETTLEMENT_COMPLETED",
-            session_id=event.session_id,
-            user_id=None,
-            metadata={
-                "amount": event.amount,
-                "provider_id": event.provider_id,
-                "ftx_op": event.fintech_operation_id,
-                "raw": event.raw_payload,
-            },
-        )
+    Espera:
+    - session_id
+    - adjudicatario_user_id
+    - amount_refunded
+    - fintech_operation_id
+    """
+    event = ForceMajeureRefundEvent(
+        session_id=payload["session_id"],
+        adjudicatario_user_id=payload["adjudicatario_user_id"],
+        amount_refunded=float(payload["amount_refunded"]),
+        fintech_operation_id=payload["fintech_operation_id"],
+        raw_payload=payload,
+    )
 
-        contract_engine.on_settlement_completed(
-            session_id=event.session_id,
-            provider_id=event.provider_id,
-            amount=event.amount,
-            fintech_operation_id=event.fintech_operation_id,
-        )
+    # 1) Actualizar PaymentSession a FORCE_MAJEURE
+    mark_force_majeure_refund(event.session_id)
 
-    # ----------------------------------------
+    # 2) Notificar ContractEngine
+    on_force_majeure_refund(
+        session_id=event.session_id,
+        adjudicatario_user_id=event.adjudicatario_user_id,
+        amount_refunded=event.amount_refunded,
+        fintech_operation_id=event.fintech_operation_id,
+    )
 
-    def handle_force_majeure_refund(self, event: ForceMajeureRefundEvent) -> None:
-        ps = self._load(event.session_id)
+    # 3) Auditoría
+    audit.log(
+        action="FINTECH_FORCE_MAJEURE_REFUND",
+        session_id=event.session_id,
+        user_id=event.adjudicatario_user_id,
+        metadata={
+            "amount_refunded": event.amount_refunded,
+            "fintech_operation_id": event.fintech_operation_id,
+            "raw": event.raw_payload,
+        },
+    )
 
-        snapshot = to_state_snapshot(ps)
-        new_snapshot = PaymentStateMachine.transition(
-            snapshot,
-            PaymentEvent.FORCE_MAJEURE_TRIGGERED,
-        )
-
-        ps.status = new_snapshot.status
-        ps.force_majeure = True
-        ps.updated_at = datetime.utcnow()
-        save_payment_session(ps)
-
-        self.audit_repo.log(
-            action="FORCE_MAJEURE_REFUND",
-            session_id=event.session_id,
-            user_id=event.adjudicatario_user_id,
-            metadata={
-                "amount_refunded": event.amount_refunded,
-                "ftx_op": event.fintech_operation_id,
-                "raw": event.raw_payload,
-            },
-        )
-
-        contract_engine.on_force_majeure_refund(
-            session_id=event.session_id,
-            adjudicatario_user_id=event.adjudicatario_user_id,
-            amount_refunded=event.amount_refunded,
-            fintech_operation_id=event.fintech_operation_id,
-        )
+    return {"handled": True, "event": "force_majeure_refund"}
