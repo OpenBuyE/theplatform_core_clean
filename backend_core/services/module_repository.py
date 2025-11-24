@@ -8,6 +8,7 @@ from datetime import datetime
 from backend_core.services.supabase_client import table
 from backend_core.services.audit_repository import log_event
 
+
 MODULES_TABLE = "ca_modules"
 BATCHES_TABLE = "ca_module_batches"
 
@@ -22,9 +23,6 @@ def create_module(
     organization_id: str,
     batch_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Crea un módulo base en ca_modules.
-    """
 
     now = datetime.utcnow().isoformat()
 
@@ -36,7 +34,7 @@ def create_module(
                 "module_code": module_code,
                 "organization_id": organization_id,
                 "batch_id": batch_id,
-                "module_status": "pending",  # pending / active / cancelled / archived / no_award
+                "module_status": "pending",
                 "has_award": None,
                 "created_at": now,
             }
@@ -77,37 +75,7 @@ def get_module_by_id(module_id: str) -> Optional[Dict[str, Any]]:
 
 
 # ============================================================
-# LIST MODULES BY PRODUCT
-# ============================================================
-
-def get_modules_by_product(product_id: str) -> List[Dict[str, Any]]:
-    resp = (
-        table(MODULES_TABLE)
-        .select("*")
-        .eq("product_id", product_id)
-        .order("created_at")
-        .execute()
-    )
-    return resp.data or []
-
-
-# ============================================================
-# LIST MODULES BY BATCH
-# ============================================================
-
-def get_modules_by_batch(batch_id: str) -> List[Dict[str, Any]]:
-    resp = (
-        table(MODULES_TABLE)
-        .select("*")
-        .eq("batch_id", batch_id)
-        .order("created_at")
-        .execute()
-    )
-    return resp.data or []
-
-
-# ============================================================
-# LIST ALL MODULES
+# LIST MODULES
 # ============================================================
 
 def list_all_modules() -> List[Dict[str, Any]]:
@@ -120,9 +88,27 @@ def list_all_modules() -> List[Dict[str, Any]]:
     return resp.data or []
 
 
-# ============================================================
-# LIST ARCHIVED MODULES
-# ============================================================
+def get_modules_by_product(product_id: str) -> List[Dict[str, Any]]:
+    resp = (
+        table(MODULES_TABLE)
+        .select("*")
+        .eq("product_id", product_id)
+        .order("created_at")
+        .execute()
+    )
+    return resp.data or []
+
+
+def get_modules_by_batch(batch_id: str) -> List[Dict[str, Any]]:
+    resp = (
+        table(MODULES_TABLE)
+        .select("*")
+        .eq("batch_id", batch_id)
+        .order("created_at")
+        .execute()
+    )
+    return resp.data or []
+
 
 def list_archived_modules() -> List[Dict[str, Any]]:
     resp = (
@@ -135,10 +121,6 @@ def list_archived_modules() -> List[Dict[str, Any]]:
     return resp.data or []
 
 
-# ============================================================
-# LIST CANCELLED MODULES
-# ============================================================
-
 def list_cancelled_modules() -> List[Dict[str, Any]]:
     resp = (
         table(MODULES_TABLE)
@@ -149,10 +131,6 @@ def list_cancelled_modules() -> List[Dict[str, Any]]:
     )
     return resp.data or []
 
-
-# ============================================================
-# LIST MODULES WITH NO AWARD
-# ============================================================
 
 def list_no_award_modules() -> List[Dict[str, Any]]:
     resp = (
@@ -166,7 +144,7 @@ def list_no_award_modules() -> List[Dict[str, Any]]:
 
 
 # ============================================================
-# UPDATE MODULE STATUS
+# UPDATE STATUS
 # ============================================================
 
 def update_module_status(module_id: str, status: str) -> Optional[Dict[str, Any]]:
@@ -194,7 +172,7 @@ def update_module_status(module_id: str, status: str) -> Optional[Dict[str, Any]
         session_id=None,
         metadata={
             "module_id": module_id,
-            "new_status": status,
+            "status": status,
         },
     )
 
@@ -206,10 +184,6 @@ def update_module_status(module_id: str, status: str) -> Optional[Dict[str, Any]
 # ============================================================
 
 def assign_module_to_session(module_id: str, session_id: str):
-    """
-    Vincula un módulo a una sesión concreta.
-    """
-
     resp = (
         table(MODULES_TABLE)
         .update({"session_id": session_id})
@@ -255,3 +229,24 @@ def mark_module_awarded(module_id: str):
 
     return resp.data[0] if resp.data else None
 
+
+# ============================================================
+# GET MODULE FOR SESSION (LA FUNCIÓN QUE FALTABA)
+# ============================================================
+
+def get_module_for_session(session_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Devuelve el módulo asociado a una sesión usando session.module_id.
+    """
+
+    from backend_core.services.session_repository import get_session_by_id
+
+    session = get_session_by_id(session_id)
+    if not session:
+        return None
+
+    module_id = session.get("module_id")
+    if not module_id:
+        return None
+
+    return get_module_by_id(module_id)
