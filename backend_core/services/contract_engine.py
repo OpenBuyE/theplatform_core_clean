@@ -1,123 +1,110 @@
-# backend_core/services/contract_engine.py
+# backend_core/services/adjudicator_engine.py
 
 from __future__ import annotations
 
-from typing import Dict, Any, Optional
+import hashlib
 from datetime import datetime
+from typing import List, Dict, Any
 
 from backend_core.services.audit_repository import log_event
-from backend_core.services.session_repository import get_session_by_id
-from backend_core.services.module_repository import (
-    get_module_for_session,
-    mark_module_awarded,
+from backend_core.services.session_repository import (
+    get_session_by_id,
+    get_participants_for_session,
+    mark_awarded,
+    finish_session,
+    get_next_session_in_series,
 )
-from backend_core.services.payment_state_machine import (
-    init_payment_session,
-    update_payment_state,
-    get_payment_session,
+from backend_core.services.module_repository import get_module_for_session
+from backend_core.services.contract_engine import contract_engine
+from backend_core.services.adjudicator_repository import (
+    get_adjudication_seed,
 )
-from backend_core.services.wallet_orchestrator import wallet_orchestrator
+from backend_core.services.session_engine import session_engine
 
 
-class ContractEngine:
+class AdjudicatorEngine:
 
     # ============================================================
-    # START CONTRACTUAL WORKFLOW
+    # VALIDATE SESSION IS READY
     # ============================================================
 
-    def start_contract_flow(self, session_id: str):
-        """Se llama después de adjudicar una sesión determinista."""
+    def _validate_ready_for_adjudication(self, session: Dict[str, Any]):
+        if session["status"] != "active":
+            raise ValueError("Session not active.")
 
+        if session["pax_registered"] < session["capacity"]:
+            raise ValueError("Session not full (capacity mismatch).")
+
+    # ============================================================
+    # COMPUTE DETERMINISTIC INDEX USING SHA256
+    # ============================================================
+
+    def _compute_awarded_index(self, session_id: str, participants: List[Dict[str, Any]]):
+        seed_obj = get_adjudication_seed(session_id)
+        public_seed = seed_obj["public_seed"] if seed_obj else ""
+
+        base = (
+            session_id +
+            "".join([p["user_id"] for p in participants]) +
+            public_seed
+        )
+
+        digest = hashlib.sha256(base.encode()).hexdigest()
+        index = int(digest, 16) % len(participants)
+        return index
+
+    # ============================================================
+    # MAIN ADJUDICATION FUNCTION
+    # ============================================================
+
+    def adjudicate_session(self, session_id: str):
         session = get_session_by_id(session_id)
         if not session:
-            raise ValueError(f"No session found: {session_id}")
+            raise ValueError("Session not found")
 
+        # Check module
         module = get_module_for_session(session_id)
+        if not module:
+            raise ValueError("Module not assigned to session")
+
+        if module["module_type"] != "standard":
+            raise ValueError("This module does not support adjudication")
+
+        # validate state
+        self._validate_ready_for_adjudication(session)
+
+        # fetch participants
+        participants = get_participants_for_session(session_id)
+        if not participants:
+            raise ValueError("No participants found")
+
+        # compute index
+        idx = self._compute_awarded_index(session_id, participants)
+        awarded = participants[idx]
+
+        # mark awarded
+        mark_awarded(session_id, awarded["user_id"])
 
         log_event(
-            "contract_flow_started",
+            "session_adjudicated",
             session_id=session_id,
-            metadata={
-                "module_id": module["id"] if module else None,
-            },
+            metadata={"awarded_user_id": awarded["user_id"]},
         )
 
-        # Iniciar payment session
-        init_payment_session(session_id)
+        # finish session
+        finish_session(session_id)
 
-    # ============================================================
-    # CONFIRM DELIVERY
-    # ============================================================
+        # rolling
+        next_session = get_next_session_in_series(session_id)
+        if next_session:
+            session_engine.activate_session(next_session["id"])
 
-    def confirm_delivery(self, session_id: str):
-        """El adjudicatario confirma que recibió el producto en tienda."""
-
-        update_payment_state(session_id, "DELIVERED")
-
-        log_event(
-            "delivery_confirmed",
-            session_id=session_id,
-        )
-
-    # ============================================================
-    # CLOSE CONTRACT
-    # ============================================================
-
-    def close_contract(self, session_id: str):
-        """Cerramos por completo el contrato."""
-
-        now = datetime.utcnow().isoformat()
-
-        # Marcar módulo como finalizado con adjudicación
-        module = get_module_for_session(session_id)
-        if module:
-            mark_module_awarded(module["id"])
-
-        update_payment_state(session_id, "CLOSED")
-
-        log_event(
-            "contract_closed",
-            session_id=session_id,
-            metadata={"closed_at": now},
-        )
-
-    # ============================================================
-    # WEBHOOKS DESDE FINTECH
-    # ============================================================
-
-    def handle_deposit_ok(self, payload: Dict[str, Any]):
-        session_id = payload["session_id"]
-
-        update_payment_state(session_id, "DEPOSITS_OK")
-
-        log_event(
-            "deposit_ok_received",
-            session_id=session_id,
-        )
-
-    def handle_settlement(self, payload: Dict[str, Any]):
-        session_id = payload["session_id"]
-
-        update_payment_state(session_id, "SETTLED")
-
-        log_event(
-            "settlement_completed",
-            session_id=session_id,
-        )
-
-    def handle_force_majeure(self, payload: Dict[str, Any]):
-        session_id = payload["session_id"]
-
-        update_payment_state(session_id, "FORCE_MAJEURE")
-
-        log_event(
-            "force_majeure_refund",
-            session_id=session_id,
-        )
+        # call contract engine
+        contract_engine.start_contract_flow(session_id)
 
 
 # ============================================================
 # SINGLETON
 # ============================================================
 
-contract_engine = ContractEngine()
+adjudicator_engine = AdjudicatorEngine()
