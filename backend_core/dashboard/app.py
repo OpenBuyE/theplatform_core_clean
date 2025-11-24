@@ -2,7 +2,9 @@
 
 import streamlit as st
 
-# Importación de vistas existentes
+# ================================
+# IMPORT DE TODAS LAS VISTAS
+# ================================
 from backend_core.dashboard.views.park_sessions import render_park_sessions
 from backend_core.dashboard.views.active_sessions import render_active_sessions
 from backend_core.dashboard.views.chains import render_chains
@@ -19,49 +21,54 @@ from backend_core.dashboard.views.contract_payment_status import (
 from backend_core.dashboard.views.operator_dashboard import (
     render_operator_dashboard,
 )
+from backend_core.dashboard.views.operator_dashboard_pro import (
+    render_operator_dashboard_pro,
+)
 from backend_core.dashboard.views.module_inspector import (
     render_module_inspector,
 )
 
 
-# =======================================================
-# MAIN DASHBOARD APP
-# =======================================================
+# ================================
+# CONFIG GLOBAL
+# ================================
+st.set_page_config(
+    page_title="Platform Core Dashboard",
+    layout="wide",
+)
+
+
+# ================================
+# NAVIGATION MENU
+# ================================
+MENU_OPTIONS = [
+    "Module Inspector",
+    "Parked Sessions",
+    "Active Sessions",
+    "Chains",
+    "History",
+    "Audit Logs",
+    "Admin Engine",
+    "Admin Seeds",
+    "Admin Operators / KYC",
+    "Contract & Payment Status",
+    "Operator Dashboard",
+    "Operator Dashboard Pro",
+]
+
 
 def main():
+    st.sidebar.title("Platform Core")
+    page = st.sidebar.selectbox("Navegación", MENU_OPTIONS)
 
-    st.set_page_config(
-        page_title="The Platform – Core Dashboard",
-        layout="wide",
-    )
+    # ===============================
+    # ENRUTAMIENTO DE VISTAS
+    # ===============================
 
-    st.sidebar.image(
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3f/Placeholder_view_vector.svg/1024px-Placeholder_view_vector.svg.png",
-        width=120,
-    )
-    st.sidebar.title("The Platform Core")
+    if page == "Module Inspector":
+        render_module_inspector()
 
-    # Menú principal con todas las vistas
-    page = st.sidebar.selectbox(
-        "Navegación",
-        [
-            "Parked Sessions",
-            "Active Sessions",
-            "Chains",
-            "History",
-            "Audit Logs",
-            "Admin Engine",
-            "Admin Seeds",
-            "Admin Operators / KYC",
-            "Contract & Payment Status",
-            "Operator Dashboard",
-            "Module Inspector",
-        ],
-    )
-
-    # RENDER DE VISTAS
-
-    if page == "Parked Sessions":
+    elif page == "Parked Sessions":
         render_park_sessions()
 
     elif page == "Active Sessions":
@@ -91,13 +98,12 @@ def main():
     elif page == "Operator Dashboard":
         render_operator_dashboard()
 
-    elif page == "Module Inspector":
-        render_module_inspector()
+    elif page == "Operator Dashboard Pro":
+        render_operator_dashboard_pro()
 
+    else:
+        st.error("Página no encontrada.")
 
-# =======================================================
-# ENTRY POINT
-# =======================================================
 
 if __name__ == "__main__":
     main()
