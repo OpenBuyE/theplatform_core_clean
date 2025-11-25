@@ -1,132 +1,104 @@
 # backend_core/dashboard/views/product_creator_pro.py
 
 import streamlit as st
-from uuid import uuid4
-from datetime import datetime
 
 from backend_core.services.product_repository_v2 import (
     create_product,
     list_categories,
 )
 
-# Si tienes providers:
-from backend_core.services.providers_seeder import list_providers_safe
+from backend_core.services.supabase_client import table
+
+# Tabla real de proveedores
+OPERATORS_TABLE = "ca_operators"
 
 
 # ===========================================================
-# UI PRINCIPAL
+# Helpers reales
+# ===========================================================
+
+def list_providers():
+    """
+    Lista operadores reales desde ca_operators.
+    Campos esperados:
+        - id
+        - name
+        - legal_name
+    """
+    try:
+        resp = (
+            table(OPERATORS_TABLE)
+            .select("*")
+            .order("name")
+            .execute()
+        )
+        return resp.data or []
+    except Exception:
+        return []
+
+
+# ===========================================================
+# PRODUCT CREATOR PRO
 # ===========================================================
 
 def render_product_creator_pro():
     st.title("🛠 Product Creator PRO")
-    st.caption("Crea productos profesionales en products_v2")
 
-    st.markdown("---")
+    st.markdown("Crea productos completos para **products_v2**.")
 
-    # =============================
-    # Cargar datos auxiliares
-    # =============================
     categories = list_categories()
-    providers = list_providers_safe() if _providers_enabled() else []
+    providers = list_providers()
 
-    # Mapas para dropdown
-    category_map = {c["name"]: c["id"] for c in categories}
-    provider_map = {p["name"]: p["id"] for p in providers}
+    # Campos principales
+    name = st.text_input("Nombre del producto")
+    sku = st.text_input("SKU (opcional)")
 
-    # =============================
-    # FORM PRINCIPAL
-    # =============================
-    with st.form("create_product_form"):
-        st.subheader("📦 Datos del Producto")
+    price_final = st.number_input("Precio final (€)", min_value=0.0, step=0.01)
+    price_base = st.number_input("Precio base (€)", min_value=0.0, step=0.01)
+    vat_rate = st.number_input("IVA (%)", min_value=0.0, step=1.0, value=21.0)
 
-        name = st.text_input("Nombre del producto", max_chars=120)
+    currency = st.selectbox("Moneda", ["EUR", "USD", "GBP"])
 
-        sku = st.text_input("SKU / referencia interna", max_chars=80)
+    description = st.text_area("Descripción", height=100)
 
-        description = st.text_area(
-            "Descripción",
-            placeholder="Descripción breve del producto",
-            height=100,
-        )
+    # CATEGORY SELECT
+    category_map = {c["categoria"]: c["id"] for c in categories} if categories else {}
+    category_name = st.selectbox("Categoría", ["Sin categoría"] + list(category_map.keys()))
+    category_id = None if category_name == "Sin categoría" else category_map[category_name]
 
-        price_final = st.number_input("Precio final (€)", min_value=0.00, step=0.10)
-        price_base = st.number_input("Precio base (€)", min_value=0.00, step=0.10)
-        vat_rate = st.number_input(
-            "IVA (%)", min_value=0.0, max_value=100.0, step=0.5
-        )
+    # PROVIDER SELECT
+    providers_map = {p.get("name", p["id"]): p["id"] for p in providers}
+    provider_name = st.selectbox("Proveedor", list(providers_map.keys()))
+    provider_id = providers_map[provider_name]
 
-        # Categoría
-        st.subheader("📂 Categoría")
-        category_name = st.selectbox(
-            "Selecciona categoría",
-            list(category_map.keys()),
-        )
-        category_id = category_map[category_name]
+    # Organización fija por ahora
+    organization_id = "11111111-1111-1111-1111-111111111111"
 
-        # Proveedor opcional
-        st.subheader("🏭 Proveedor (opcional)")
-        if providers:
-            provider_name = st.selectbox(
-                "Proveedor",
-                list(provider_map.keys()),
-                help="Proveedor asociado al producto",
-            )
-            provider_id = provider_map[provider_name]
-        else:
-            provider_id = None
-            st.info("No hay proveedores cargados.")
+    # Imagen
+    image_url = st.text_input("URL de imagen (Unsplash u otra)")
 
-        st.subheader("🖼 Imagen del producto")
-        image_url = st.text_input(
-            "URL de imagen",
-            placeholder="https://source.unsplash.com/featured/?product"
-        )
-
-        # Botón enviar
-        submitted = st.form_submit_button("➕ Crear Producto")
-
-    # ==============================================
-    # SUBMISIÓN DEL FORMULARIO
-    # ==============================================
-    if submitted:
-        if not name:
-            st.error("El producto debe tener nombre.")
-            return
-
-        new_id = str(uuid4())
-
-        payload = {
-            "id": new_id,
-            "organization_id": "11111111-1111-1111-1111-111111111111",
+    # -------------------------------------
+    # BOTÓN DE CREACIÓN
+    # -------------------------------------
+    if st.button("Crear producto", type="primary"):
+        data = {
+            "organization_id": organization_id,
             "provider_id": provider_id,
-            "category_id": category_id,
-            "sku": sku,
+            "sku": sku or None,
             "name": name,
-            "description": description,
+            "description": description or None,
             "price_final": price_final,
             "price_base": price_base,
             "vat_rate": vat_rate,
-            "currency": "EUR",
-            "image_url": image_url,
+            "currency": currency,
+            "image_url": image_url or None,
+            "category_id": category_id,
         }
 
-        ok = create_product(payload)
+        ok = create_product(data)
 
         if ok:
-            st.success(f"Producto creado correctamente ✔\nID: {new_id}")
+            st.success("Producto creado correctamente 🎉")
             st.balloons()
         else:
-            st.error("Error creando el producto en Supabase.")
-
-
-# ===========================================
-# UTILIDADES
-# ===========================================
-
-def _providers_enabled() -> bool:
-    """Devuelve True si existe provider_seeder con list_providers_safe."""
-    try:
-        _ = list_providers_safe()
-        return True
-    except:
-        return False
+            st.error("Error al crear el producto. Revisa los datos o la consola.")
