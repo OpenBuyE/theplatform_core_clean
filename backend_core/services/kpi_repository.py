@@ -6,15 +6,11 @@ SESSIONS_TABLE = "ca_sessions"
 PAYMENTS_TABLE = "ca_payment_sessions"
 WALLETS_TABLE = "ca_wallets"
 
-
 # ============================================================
 # SESSION KPIs
 # ============================================================
 
 def kpi_sessions_active():
-    """
-    Cuenta sesiones ACTIVAS.
-    """
     resp = (
         table(SESSIONS_TABLE)
         .select("id")
@@ -25,13 +21,23 @@ def kpi_sessions_active():
 
 
 def kpi_sessions_finished():
-    """
-    Cuenta sesiones finalizadas.
-    """
     resp = (
         table(SESSIONS_TABLE)
         .select("id")
         .eq("status", "finished")
+        .execute()
+    )
+    return len(resp.data or [])
+
+
+def kpi_sessions_expired():
+    """
+    Cuenta las sesiones expiradas (no completaron aforo en plazo).
+    """
+    resp = (
+        table(SESSIONS_TABLE)
+        .select("id")
+        .eq("status", "expired")
         .execute()
     )
     return len(resp.data or [])
@@ -42,27 +48,20 @@ def kpi_sessions_finished():
 # ============================================================
 
 def kpi_payment_deposit_ok():
-    """
-    Pagos cuya fase de DEPOSITO está OK.
-    La columna correcta en la tabla es 'status', NO 'state'.
-    """
     resp = (
         table(PAYMENTS_TABLE)
         .select("id")
-        .eq("status", "deposit_ok")   # 🔥 CORREGIDO 
+        .eq("status", "deposit_ok")
         .execute()
     )
     return len(resp.data or [])
 
 
 def kpi_payment_deposit_failed():
-    """
-    Pagos fallidos en la fase de DEPOSITO.
-    """
     resp = (
         table(PAYMENTS_TABLE)
         .select("id")
-        .eq("status", "deposit_failed")   # 🔥 CORREGIDO
+        .eq("status", "deposit_failed")
         .execute()
     )
     return len(resp.data or [])
@@ -73,9 +72,6 @@ def kpi_payment_deposit_failed():
 # ============================================================
 
 def kpi_wallets_total():
-    """
-    Total wallets creadas.
-    """
     resp = (
         table(WALLETS_TABLE)
         .select("id")
