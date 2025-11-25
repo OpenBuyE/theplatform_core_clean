@@ -5,7 +5,7 @@ from datetime import datetime
 
 PRODUCTS_TABLE = "products_v2"
 CATEGORIES_TABLE = "categorias_v2"
-PROVIDERS_TABLE = "ca_operators"   # si tus proveedores van aquí
+PROVIDERS_TABLE = "ca_operators"   # Ajusta si tus proveedores están en otra tabla
 
 
 # ---------------------------------------------------------
@@ -14,11 +14,72 @@ PROVIDERS_TABLE = "ca_operators"   # si tus proveedores van aquí
 def list_categories():
     resp = (
         table(CATEGORIES_TABLE)
-        .select("id, nombre, descripcion, is_active")
+        .select("id, nombre, descripcion, is_active, created_at")
         .order("nombre")
         .execute()
     )
     return resp.data or []
+
+
+# ---------------------------------------------------------
+# CREAR CATEGORÍA (FALTABA)
+# ---------------------------------------------------------
+def create_category(nombre: str, descripcion: str, is_active: bool = True):
+    payload = {
+        "nombre": nombre,
+        "descripcion": descripcion,
+        "is_active": is_active,
+        "created_at": datetime.utcnow().isoformat()
+    }
+
+    resp = table(CATEGORIES_TABLE).insert(payload).execute()
+    return resp.data
+
+
+# ---------------------------------------------------------
+# ACTUALIZAR CATEGORÍA (FALTABA)
+# ---------------------------------------------------------
+def update_category(category_id: str, nombre: str, descripcion: str, is_active: bool):
+    payload = {
+        "nombre": nombre,
+        "descripcion": descripcion,
+        "is_active": is_active,
+    }
+
+    resp = (
+        table(CATEGORIES_TABLE)
+        .update(payload)
+        .eq("id", category_id)
+        .execute()
+    )
+    return resp.data
+
+
+# ---------------------------------------------------------
+# ELIMINAR CATEGORÍA (FALTABA)
+# ---------------------------------------------------------
+def delete_category(category_id: str):
+    resp = (
+        table(CATEGORIES_TABLE)
+        .delete()
+        .eq("id", category_id)
+        .execute()
+    )
+    return resp.data
+
+
+# ---------------------------------------------------------
+# OBTENER CATEGORÍA POR ID
+# ---------------------------------------------------------
+def get_category_by_id(category_id: str):
+    resp = (
+        table(CATEGORIES_TABLE)
+        .select("*")
+        .eq("id", category_id)
+        .single()
+        .execute()
+    )
+    return resp.data
 
 
 # ---------------------------------------------------------
@@ -63,27 +124,9 @@ def get_product_v2(product_id: str):
 
 
 # ---------------------------------------------------------
-# OBTENER CATEGORÍA POR ID (FALTANTE)
-# ---------------------------------------------------------
-def get_category_by_id(category_id: str):
-    resp = (
-        table(CATEGORIES_TABLE)
-        .select("id, nombre, descripcion, is_active")
-        .eq("id", category_id)
-        .single()
-        .execute()
-    )
-    return resp.data
-
-
-# ---------------------------------------------------------
-# OBTENER PROVIDER POR ID (FALTANTE)
+# PROVIDER LOOKUP
 # ---------------------------------------------------------
 def get_provider_by_id(provider_id: str):
-    """
-    Si tus proveedores están en ca_operators:
-    puedes ajustar campos según tu estructura.
-    """
     resp = (
         table(PROVIDERS_TABLE)
         .select("id, name, kyc_status, created_at")
@@ -111,7 +154,6 @@ def create_product(
     category_id: str,
 ):
     payload = {
-        "id": None,  # autogen UUID
         "organization_id": organization_id,
         "provider_id": provider_id,
         "sku": sku,
