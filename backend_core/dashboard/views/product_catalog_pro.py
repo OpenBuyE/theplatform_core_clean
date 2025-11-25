@@ -7,6 +7,8 @@ from backend_core.services.product_repository_v2 import (
     list_products,
     list_categories,
     filter_products,
+    get_catalog_summary,
+    get_category_stats,
 )
 
 from backend_core.dashboard.views.product_details_pro import (
@@ -20,7 +22,8 @@ from backend_core.dashboard.views.product_details_pro import (
 
 def render_product_catalog_pro():
     """
-    Punto de entrada: decide si mostrar catálogo o ficha de producto.
+    Punto de entrada: decide si mostrar catálogo o ficha de producto,
+    y pinta KPIs globales + KPIs por categoría.
     """
 
     # Inicializamos session_state si no existe
@@ -59,7 +62,18 @@ def _go_back_to_catalog():
 # ============================================
 
 def _render_catalog_page():
-    st.title("📦 Catálogo de Productos PRO")
+    st.title("📦 Product Catalog PRO")
+
+    # ==========================
+    # KPIs GLOBAL & CATEGORY KPIs
+    # ==========================
+    summary = get_catalog_summary()
+    category_stats = get_category_stats()
+
+    _render_global_kpis(summary)
+    _render_category_kpi_cards(category_stats)
+
+    st.markdown("---")
 
     categories = list_categories()
 
@@ -67,7 +81,8 @@ def _render_catalog_page():
     with st.sidebar:
         st.header("🔍 Filtros")
 
-        category_map = {c.get("name", c.get("id")): c["id"] for c in categories}
+        # Mapa categorías
+        category_map = {c.get("categoria", c.get("id")): c["id"] for c in categories}
         selected_category = st.selectbox("Categoría", ["Todas"] + list(category_map.keys()))
 
         min_price = st.number_input("Precio mínimo", min_value=0.0, step=1.0, value=0.0)
@@ -98,7 +113,86 @@ def _render_catalog_page():
 
 
 # ============================================
-# GRID DE TARJETAS
+# GLOBAL KPIs
+# ============================================
+
+def _render_global_kpis(summary: dict):
+    total_products = summary.get("total_products", 0)
+    total_categories = summary.get("total_categories", 0)
+    avg_price = summary.get("avg_price", None)
+    products_by_category = summary.get("products_by_category", {})
+
+    # Categoría top
+    top_cat_count = max(products_by_category.values()) if products_by_category else 0
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.metric("Productos totales", total_products)
+
+    with col2:
+        st.metric("Categorías activas", total_categories)
+
+    with col3:
+        if avg_price is not None:
+            st.metric("Precio medio catálogo", f"{avg_price:.2f} €")
+        else:
+            st.metric("Precio medio catálogo", "—")
+
+    with col4:
+        st.metric("Productos en categoría top", top_cat_count)
+
+
+# ============================================
+# CATEGORY KPI CARDS
+# ============================================
+
+def _render_category_kpi_cards(category_stats: list[dict]):
+    if not category_stats:
+        st.info("No hay estadísticas de categorías todavía.")
+        return
+
+    st.subheader("📊 Distribución por categorías")
+
+    cols_per_row = 3
+    rows = math.ceil(len(category_stats) / cols_per_row)
+
+    index = 0
+    for _ in range(rows):
+        cols = st.columns(cols_per_row)
+        for col in cols:
+            if index >= len(category_stats):
+                break
+            stat = category_stats[index]
+            index += 1
+            with col:
+                _render_single_category_card(stat)
+
+
+def _render_single_category_card(stat: dict):
+    name = stat["category_name"]
+    count = stat["product_count"]
+    avg_price = stat["avg_price"]
+    min_price = stat["min_price"]
+    max_price = stat["max_price"]
+
+    st.markdown("----")
+    st.markdown(f"#### 📁 {name}")
+    st.markdown(f"**Productos:** {count}")
+
+    if avg_price is not None:
+        st.markdown(
+            f"**Precio medio:** {avg_price:.2f} €  \n"
+            f"**Mín:** {min_price:.2f} € — **Máx:** {max_price:.2f} €"
+        )
+    else:
+        st.markdown("_Sin precios registrados_")
+
+    # Futuro: filtro rápido por categoría (por ahora solo display)
+
+
+# ============================================
+# GRID DE TARJETAS DE PRODUCTOS
 # ============================================
 
 def _render_product_cards(products):
