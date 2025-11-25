@@ -4,86 +4,56 @@ from backend_core.services.supabase_client import table
 
 PRODUCTS_TABLE = "products_v2"
 CATEGORIES_TABLE = "categorias_v2"
-OPERATORS_TABLE = "ca_operators"
 
 
-# =====================================================
-# LISTAR PRODUCTOS (todos)
-# =====================================================
-def list_products_v2():
-    resp = (
-        table(PRODUCTS_TABLE)
-        .select("*")
-        .order("created_at", desc=True)
-        .execute()
-    )
-    return resp.data or []
+# ===========================================================
+# CATEGORIES
+# ===========================================================
 
-
-# Alias por compatibilidad, por si algún código antiguo usa list_products()
-def list_products():
-    return list_products_v2()
-
-
-# =====================================================
-# LISTAR CATEGORÍAS
-#  (no asumimos nombre: seleccionamos todo y ordenamos por id)
-# =====================================================
 def list_categories():
+    """Devuelve todas las categorías ordenadas por nombre."""
     resp = (
         table(CATEGORIES_TABLE)
         .select("*")
-        .order("id")
+        .order("categoria")      # columna correcta en categorias_v2
         .execute()
     )
     return resp.data or []
 
 
-# =====================================================
-# LISTAR PRODUCTOS POR CATEGORÍA
-# =====================================================
-def list_products_by_category(category_id: str):
-    if not category_id:
-        return list_products_v2()
+# ===========================================================
+# PRODUCTS
+# ===========================================================
 
+def list_products(limit: int = 100):
+    """Lista productos activos, ordenados por fecha."""
     resp = (
         table(PRODUCTS_TABLE)
         .select("*")
-        .eq("category_id", category_id)
         .order("created_at", desc=True)
+        .limit(limit)
         .execute()
     )
     return resp.data or []
 
 
-# =====================================================
-# FILTRADO AVANZADO
-#  (category_id, rango de precios, búsqueda por nombre)
-# =====================================================
-def filter_products(category_id=None, min_price=None, max_price=None, search=None):
-    q = table(PRODUCTS_TABLE).select("*")
+def filter_products(category_id: str = None, text: str = None):
+    """Filtro: por categoría y texto."""
+    query = table(PRODUCTS_TABLE).select("*")
 
     if category_id:
-        q = q.eq("category_id", category_id)
+        query = query.eq("category_id", category_id)
 
-    if search:
-        # asumimos campo name (si luego vemos que no existe, lo ajustamos)
-        q = q.ilike("name", f"%{search}%")
+    if text:
+        text_pattern = f"%{text.lower()}%"
+        query = query.ilike("name", text_pattern)
 
-    if min_price is not None:
-        q = q.gte("price_final", min_price)
-
-    if max_price is not None:
-        q = q.lte("price_final", max_price)
-
-    resp = q.order("created_at", desc=True).execute()
+    resp = query.order("created_at", desc=True).execute()
     return resp.data or []
 
 
-# =====================================================
-# OBTENER PRODUCTO POR ID (usa id, NO product_id)
-# =====================================================
-def get_product_v2(product_id: str):
+def get_product_by_id(product_id: str):
+    """Devuelve un producto por id."""
     resp = (
         table(PRODUCTS_TABLE)
         .select("*")
@@ -94,35 +64,25 @@ def get_product_v2(product_id: str):
     return resp.data
 
 
-# =====================================================
-# GET CATEGORY BY ID
-# =====================================================
-def get_category_by_id(category_id: str):
-    if not category_id:
-        return None
+# ===========================================================
+# CREATE PRODUCT (NUEVO)
+# ===========================================================
 
-    resp = (
-        table(CATEGORIES_TABLE)
-        .select("*")
-        .eq("id", category_id)
-        .single()
-        .execute()
-    )
-    return resp.data
-
-
-# =====================================================
-# GET PROVIDER (OPERATOR) BY ID
-# =====================================================
-def get_provider_by_id(provider_id: str):
-    if not provider_id:
-        return None
-
-    resp = (
-        table(OPERATORS_TABLE)
-        .select("*")
-        .eq("id", provider_id)
-        .single()
-        .execute()
-    )
-    return resp.data
+def create_product(data: dict) -> bool:
+    """
+    Inserta un producto completo en products_v2.
+    Data debe incluir:
+      id, organization_id, provider_id, category_id,
+      sku, name, description, price_final, price_base,
+      vat_rate, currency, image_url
+    """
+    try:
+        resp = (
+            table(PRODUCTS_TABLE)
+            .insert(data)
+            .execute()
+        )
+        return resp.data is not None
+    except Exception as e:
+        print("ERROR create_product:", e)
+        return False
