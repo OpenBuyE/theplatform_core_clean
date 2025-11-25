@@ -2,103 +2,116 @@
 
 import streamlit as st
 
-# Importación de vistas núcleo
+# ============================
+# IMPORTAR TODAS LAS VISTAS
+# ============================
+
 from backend_core.dashboard.views.park_sessions import render_park_sessions
 from backend_core.dashboard.views.active_sessions import render_active_sessions
 from backend_core.dashboard.views.chains import render_chains
 from backend_core.dashboard.views.history_sessions import render_history_sessions
 from backend_core.dashboard.views.audit_logs import render_audit_logs
+
 from backend_core.dashboard.views.admin_engine import render_admin_engine
 from backend_core.dashboard.views.admin_seeds import render_admin_seeds
 from backend_core.dashboard.views.admin_operators_kyc import (
     render_admin_operators_kyc,
 )
-from backend_core.dashboard.views.contract_payment_status import (
-    render_contract_payment_status,
-)
+
 from backend_core.dashboard.views.operator_dashboard import (
     render_operator_dashboard,
 )
-from backend_core.dashboard.views.operator_dashboard_pro import (
-    render_operator_dashboard_pro,
-)
+
 from backend_core.dashboard.views.module_inspector import (
     render_module_inspector,
 )
-from backend_core.dashboard.views.products_browser import (
-    render_products_browser,
+
+from backend_core.dashboard.views.contract_payment_status import (
+    render_contract_payment_status,
+)
+
+# NUEVO — Catálogo Profesional de productos
+from backend_core.dashboard.views.product_catalog_pro import (
+    render_product_catalog_pro,
 )
 
 
+# ============================
+# CONFIG STREAMLIT
+# ============================
+
+st.set_page_config(
+    page_title="Platform Core",
+    layout="wide",
+)
+
+
+# ============================
+# MAIN APP
+# ============================
+
 def main():
-    st.set_page_config(
-        page_title="Platform Core Dashboard",
-        layout="wide",
-        initial_sidebar_state="expanded",
-    )
+    st.title("⚡ Platform Core — Admin Panel")
 
-    st.sidebar.title("Platform Core — Safe Boot + Pro")
-    st.sidebar.caption("Modo estable con vistas Pro nativas")
+    st.sidebar.title("Navegación")
 
-    menu = st.sidebar.selectbox(
-        "Navegación",
+    page = st.sidebar.selectbox(
+        "Selecciona página",
         [
-            "Module Inspector",
             "Parked Sessions",
             "Active Sessions",
-            "Products Browser",
             "Chains",
             "History",
             "Audit Logs",
-            "Contract & Payment Status",
-            "Operator Dashboard",
-            "Operator Dashboard Pro",
             "Admin Engine",
             "Admin Seeds",
             "Admin Operators / KYC",
+            "Operator Dashboard",
+            "Module Inspector",
+            "Contract & Payment Status",
+            "Products Catalog PRO",
         ],
     )
 
-    # RENDER DE VISTAS
-    if menu == "Parked Sessions":
+    # ===== ROUTER =====
+
+    if page == "Parked Sessions":
         render_park_sessions()
 
-    elif menu == "Active Sessions":
+    elif page == "Active Sessions":
         render_active_sessions()
 
-    elif menu == "Products Browser":
-        render_products_browser()
-
-    elif menu == "Chains":
+    elif page == "Chains":
         render_chains()
 
-    elif menu == "History":
+    elif page == "History":
         render_history_sessions()
 
-    elif menu == "Audit Logs":
+    elif page == "Audit Logs":
         render_audit_logs()
 
-    elif menu == "Contract & Payment Status":
-        render_contract_payment_status()
-
-    elif menu == "Operator Dashboard":
-        render_operator_dashboard()
-
-    elif menu == "Operator Dashboard Pro":
-        render_operator_dashboard_pro()
-
-    elif menu == "Admin Engine":
+    elif page == "Admin Engine":
         render_admin_engine()
 
-    elif menu == "Admin Seeds":
+    elif page == "Admin Seeds":
         render_admin_seeds()
 
-    elif menu == "Admin Operators / KYC":
+    elif page == "Admin Operators / KYC":
         render_admin_operators_kyc()
 
-    elif menu == "Module Inspector":
+    elif page == "Operator Dashboard":
+        render_operator_dashboard()
+
+    elif page == "Module Inspector":
         render_module_inspector()
 
+    elif page == "Contract & Payment Status":
+        render_contract_payment_status()
 
+    elif page == "Products Catalog PRO":
+        render_product_catalog_pro()
+
+
+# Entrypoint
 if __name__ == "__main__":
     main()
