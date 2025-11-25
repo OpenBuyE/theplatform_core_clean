@@ -1,9 +1,10 @@
 # backend_core/dashboard/app.py
 
 import streamlit as st
+from urllib.parse import urlparse, parse_qs
 
 # ============================
-# IMPORTAR TODAS LAS VISTAS
+# IMPORT VISTAS BASE
 # ============================
 
 from backend_core.dashboard.views.park_sessions import render_park_sessions
@@ -11,69 +12,102 @@ from backend_core.dashboard.views.active_sessions import render_active_sessions
 from backend_core.dashboard.views.chains import render_chains
 from backend_core.dashboard.views.history_sessions import render_history_sessions
 from backend_core.dashboard.views.audit_logs import render_audit_logs
+from backend_core.dashboard.views.operator_dashboard import render_operator_dashboard
 
-from backend_core.dashboard.views.admin_engine import render_admin_engine
-from backend_core.dashboard.views.admin_seeds import render_admin_seeds
-from backend_core.dashboard.views.admin_operators_kyc import (
-    render_admin_operators_kyc,
+# ============================
+# IMPORT VISTAS PRO
+# ============================
+
+from backend_core.dashboard.views.operator_dashboard_pro import (
+    render_operator_dashboard_pro,
 )
 
-from backend_core.dashboard.views.operator_dashboard import (
-    render_operator_dashboard,
-)
-
-from backend_core.dashboard.views.module_inspector import (
-    render_module_inspector,
-)
-
-from backend_core.dashboard.views.contract_payment_status import (
-    render_contract_payment_status,
-)
-
-# NUEVO — Catálogo Profesional de productos
 from backend_core.dashboard.views.product_catalog_pro import (
     render_product_catalog_pro,
 )
 
+from backend_core.dashboard.views.product_details_pro import (
+    render_product_details_pro,
+)
+
+from backend_core.dashboard.views.product_creator_pro import (
+    render_product_creator_pro,
+)
+
+from backend_core.dashboard.views.category_manager_pro import (
+    render_category_manager_pro,
+)
+
+from backend_core.dashboard.views.admin_seeds import (
+    render_admin_seeds,
+)
 
 # ============================
-# CONFIG STREAMLIT
+# PAGE CONFIG
 # ============================
 
 st.set_page_config(
-    page_title="Platform Core",
-    layout="wide",
+    page_title="The Platform Core Dashboard",
+    page_icon="🧬",
+    layout="wide"
 )
 
 
 # ============================
-# MAIN APP
+# ROUTER — QUERY PARAMS
+# ============================
+
+def detect_product_details_route():
+    """Detecta si hay ?product_id=XYZ en la URL para abrir Product Details Pro automáticamente."""
+    query = st.experimental_get_query_params()
+    if "product_id" in query:
+        return query["product_id"][0]
+    return None
+
+
+# ============================
+# MAIN
 # ============================
 
 def main():
-    st.title("⚡ Platform Core — Admin Panel")
 
-    st.sidebar.title("Navegación")
+    # ============
+    # SIDEBAR NAV
+    # ============
 
-    page = st.sidebar.selectbox(
-        "Selecciona página",
-        [
-            "Parked Sessions",
-            "Active Sessions",
-            "Chains",
-            "History",
-            "Audit Logs",
-            "Admin Engine",
-            "Admin Seeds",
-            "Admin Operators / KYC",
-            "Operator Dashboard",
-            "Module Inspector",
-            "Contract & Payment Status",
-            "Products Catalog PRO",
-        ],
-    )
+    st.sidebar.title("📊 Navigation")
 
-    # ===== ROUTER =====
+    pages = [
+        "Parked Sessions",
+        "Active Sessions",
+        "Chains",
+        "History",
+        "Audit Logs",
+        "Operator Dashboard",
+        "Operator Dashboard Pro",
+        "Product Catalog Pro",
+        "Product Creator Pro",
+        "Category Manager Pro",
+        "Admin Seeds",
+    ]
+
+    page = st.sidebar.selectbox("Select page", pages)
+
+    st.sidebar.markdown("---")
+    st.sidebar.caption("The Platform Core — SaaS Engine")
+
+    # =======================================
+    # AUTO-ROUTER: Product Details Pro direct
+    # =======================================
+
+    product_id = detect_product_details_route()
+    if product_id:
+        st.sidebar.success(f"Viewing product: {product_id}")
+        return render_product_details_pro(product_id)
+
+    # ============================
+    # RENDER PAGES
+    # ============================
 
     if page == "Parked Sessions":
         render_park_sessions()
@@ -90,28 +124,24 @@ def main():
     elif page == "Audit Logs":
         render_audit_logs()
 
-    elif page == "Admin Engine":
-        render_admin_engine()
+    elif page == "Operator Dashboard":
+        render_operator_dashboard()
+
+    elif page == "Operator Dashboard Pro":
+        render_operator_dashboard_pro()
+
+    elif page == "Product Catalog Pro":
+        render_product_catalog_pro()
+
+    elif page == "Product Creator Pro":
+        render_product_creator_pro()
+
+    elif page == "Category Manager Pro":
+        render_category_manager_pro()
 
     elif page == "Admin Seeds":
         render_admin_seeds()
 
-    elif page == "Admin Operators / KYC":
-        render_admin_operators_kyc()
 
-    elif page == "Operator Dashboard":
-        render_operator_dashboard()
-
-    elif page == "Module Inspector":
-        render_module_inspector()
-
-    elif page == "Contract & Payment Status":
-        render_contract_payment_status()
-
-    elif page == "Products Catalog PRO":
-        render_product_catalog_pro()
-
-
-# Entrypoint
 if __name__ == "__main__":
     main()
