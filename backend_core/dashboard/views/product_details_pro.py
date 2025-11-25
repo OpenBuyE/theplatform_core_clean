@@ -10,17 +10,29 @@ from backend_core.services.product_repository_v2 import (
 )
 
 
-# =====================================================
-# HELPER — Renderizar Bloque de Info
-# =====================================================
+def _choose_label(obj: dict, fallback: str = "—") -> str:
+    """
+    Intenta devolver un nombre legible para una categoría o proveedor
+    probando varias claves típicas, y si no, el id.
+    """
+    if not obj:
+        return fallback
+
+    for key in ("name", "nombre", "label", "title"):
+        if key in obj and obj[key]:
+            return str(obj[key])
+
+    if "id" in obj and obj["id"]:
+        return str(obj["id"])
+
+    return fallback
+
+
 def _info(label: str, value: str):
     st.markdown(f"**{label}:**<br>{value}", unsafe_allow_html=True)
     st.divider()
 
 
-# =====================================================
-# HELPER — Caja de precio estilo fintech
-# =====================================================
 def _render_price_block(product):
     st.markdown("### 💶 Precio")
 
@@ -30,62 +42,54 @@ def _render_price_block(product):
         st.metric("Final", f"{product['price_final']} €")
 
     with col2:
-        if product.get("price_base"):
-            st.metric("Base", f"{product['price_base']} €")
-        else:
-            st.metric("Base", "—")
+        base = product.get("price_base")
+        st.metric("Base", f"{base} €" if base is not None else "—")
 
     with col3:
-        if product.get("vat_rate"):
-            st.metric("IVA", f"{product['vat_rate']} %")
-        else:
-            st.metric("IVA", "—")
+        vat = product.get("vat_rate")
+        st.metric("IVA", f"{vat} %" if vat is not None else "—")
 
     st.divider()
 
 
-# =====================================================
-# MAIN RENDER
-# =====================================================
 def render_product_details_pro(product_id: str):
-
     product = get_product_v2(product_id)
 
     if not product:
         st.error("❌ Producto no encontrado.")
         return
 
-    # -------- HEADER --------
+    # HEADER
     st.title(product["name"])
 
-    # -------- IMAGE --------
-    st.image(
-        product.get("image_url", ""),
-        width=450,
-        caption=product.get("name", "Producto")
-    )
+    # IMAGE
+    if product.get("image_url"):
+        st.image(
+            product["image_url"],
+            width=450,
+            caption=product.get("name", "Producto"),
+        )
 
     st.divider()
 
-    # -------- PRICE --------
+    # PRECIO
     _render_price_block(product)
 
-    # -------- INFO --------
+    # INFO
     st.subheader("📄 Información del producto")
 
-    # descripción
     if product.get("description"):
         st.markdown(product["description"])
         st.divider()
 
-    # provider
+    # Proveedor
     provider = get_provider_by_id(product.get("provider_id"))
-    provider_name = provider["name"] if provider else "—"
+    provider_name = _choose_label(provider)
     _info("Proveedor", provider_name)
 
-    # categoría
+    # Categoría
     category = get_category_by_id(product.get("category_id"))
-    category_name = category["name"] if category else "—"
+    category_name = _choose_label(category)
     _info("Categoría", category_name)
 
     # SKU
@@ -99,13 +103,18 @@ def render_product_details_pro(product_id: str):
 
     # created_at
     created_raw = product.get("created_at")
-    try:
-        created_fmt = datetime.fromisoformat(created_raw.replace("Z", "")).strftime("%Y-%m-%d %H:%M")
-    except:
-        created_fmt = created_raw or "—"
+    if created_raw:
+        try:
+            created_fmt = datetime.fromisoformat(
+                created_raw.replace("Z", "")
+            ).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            created_fmt = created_raw
+    else:
+        created_fmt = "—"
 
     _info("Creado", created_fmt)
 
-    # -------- ADVANCED --------
+    # JSON RAW
     with st.expander("🔧 Ver JSON RAW (debug)"):
         st.json(product)
