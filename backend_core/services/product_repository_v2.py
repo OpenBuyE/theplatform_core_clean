@@ -6,10 +6,27 @@ PRODUCTS_TABLE = "products_v2"
 CATEGORIES_TABLE = "categorias_v2"
 
 
-# ------------------------------------
-# BASIC LIST
-# ------------------------------------
-def list_products():
+# ---------------------------------------------------------
+# LISTAR CATEGORÍAS (USO EN PRODUCT CATALOG PRO)
+# ---------------------------------------------------------
+def list_categories():
+    """
+    Devuelve todas las categorías de categorías_v2.
+    Orden temporalmente por ID para evitar problemas de columnas inexistentes.
+    """
+    resp = (
+        table(CATEGORIES_TABLE)
+        .select("*")
+        .order("id")   # FIX: antes .order("name"), columna inexistente
+        .execute()
+    )
+    return resp.data or []
+
+
+# ---------------------------------------------------------
+# LISTAR PRODUCTOS
+# ---------------------------------------------------------
+def list_products_v2():
     resp = (
         table(PRODUCTS_TABLE)
         .select("*")
@@ -19,39 +36,29 @@ def list_products():
     return resp.data or []
 
 
-# ------------------------------------
-# CATEGORIES
-# ------------------------------------
-def list_categories():
+# ---------------------------------------------------------
+# PRODUCTOS POR CATEGORÍA
+# ---------------------------------------------------------
+def list_products_by_category(category_id: str):
     resp = (
-        table(CATEGORIES_TABLE)
+        table(PRODUCTS_TABLE)
         .select("*")
-        .order("name")
+        .eq("category_id", category_id)
+        .order("created_at", desc=True)
         .execute()
     )
     return resp.data or []
 
 
-# ------------------------------------
-# FILTERED PRODUCTS
-# ------------------------------------
-def filter_products(category=None, provider=None, active=None, min_price=None, max_price=None):
-    q = table(PRODUCTS_TABLE).select("*")
-
-    if category:
-        q = q.eq("category_id", category)
-
-    if provider:
-        q = q.eq("provider_id", provider)
-
-    if active is not None:
-        q = q.eq("active", active)
-
-    if min_price:
-        q = q.gte("price_final", min_price)
-
-    if max_price:
-        q = q.lte("price_final", max_price)
-
-    resp = q.order("price_final").execute()
-    return resp.data or []
+# ---------------------------------------------------------
+# GET PRODUCT
+# ---------------------------------------------------------
+def get_product_v2(product_id: str):
+    resp = (
+        table(PRODUCTS_TABLE)
+        .select("*")
+        .eq("id", product_id)
+        .single()
+        .execute()
+    )
+    return resp.data
