@@ -2,17 +2,18 @@
 
 from backend_core.services.supabase_client import table
 
-
 SESSIONS_TABLE = "ca_sessions"
 PAYMENTS_TABLE = "ca_payment_sessions"
+WALLETS_TABLE = "ca_wallets"
 
 
-# ===========================================
-#   SESSIONS METRICS
-# ===========================================
+# ============================================================
+# SESSION KPIs
+# ============================================================
+
 def kpi_sessions_active():
     """
-    Número de sesiones actualmente activas.
+    Cuenta sesiones ACTIVAS.
     """
     resp = (
         table(SESSIONS_TABLE)
@@ -25,7 +26,7 @@ def kpi_sessions_active():
 
 def kpi_sessions_finished():
     """
-    Número de sesiones finalizadas correctamente.
+    Cuenta sesiones finalizadas.
     """
     resp = (
         table(SESSIONS_TABLE)
@@ -36,69 +37,48 @@ def kpi_sessions_finished():
     return len(resp.data or [])
 
 
-def kpi_sessions_expired():
+# ============================================================
+# PAYMENT KPIs
+# ============================================================
+
+def kpi_payment_deposit_ok():
     """
-    Número de sesiones expiradas por timeout (no aforo).
+    Pagos cuya fase de DEPOSITO está OK.
+    La columna correcta en la tabla es 'status', NO 'state'.
     """
     resp = (
-        table(SESSIONS_TABLE)
+        table(PAYMENTS_TABLE)
         .select("id")
-        .eq("status", "expired")
+        .eq("status", "deposit_ok")   # 🔥 CORREGIDO 
         .execute()
     )
     return len(resp.data or [])
 
 
-# ===========================================
-#   PAYMENT METRICS
-# ===========================================
-def kpi_wallet_deposit_ok():
+def kpi_payment_deposit_failed():
     """
-    Pagos que entraron correctamente a depósito.
+    Pagos fallidos en la fase de DEPOSITO.
     """
     resp = (
         table(PAYMENTS_TABLE)
         .select("id")
-        .eq("state", "deposit_ok")
+        .eq("status", "deposit_failed")   # 🔥 CORREGIDO
         .execute()
     )
     return len(resp.data or [])
 
 
-def kpi_wallet_deposit_failed():
+# ============================================================
+# WALLET KPIs
+# ============================================================
+
+def kpi_wallets_total():
     """
-    Pagos que fallaron durante el intento de depósito.
+    Total wallets creadas.
     """
     resp = (
-        table(PAYMENTS_TABLE)
+        table(WALLETS_TABLE)
         .select("id")
-        .eq("state", "deposit_failed")
-        .execute()
-    )
-    return len(resp.data or [])
-
-
-def kpi_wallet_refunds():
-    """
-    Pagos devueltos (refunds automáticos por expiración o manuales).
-    """
-    resp = (
-        table(PAYMENTS_TABLE)
-        .select("id")
-        .eq("state", "refunded")
-        .execute()
-    )
-    return len(resp.data or [])
-
-
-def kpi_wallet_pending():
-    """
-    Pagos aún en proceso.
-    """
-    resp = (
-        table(PAYMENTS_TABLE)
-        .select("id")
-        .eq("state", "pending")
         .execute()
     )
     return len(resp.data or [])
