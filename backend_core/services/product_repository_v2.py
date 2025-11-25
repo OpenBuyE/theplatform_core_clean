@@ -2,7 +2,6 @@
 
 from backend_core.services.supabase_client import table
 
-
 PRODUCTS_TABLE = "products_v2"
 CATEGORIES_TABLE = "categorias_v2"
 OPERATORS_TABLE = "ca_operators"
@@ -11,7 +10,7 @@ OPERATORS_TABLE = "ca_operators"
 # =====================================================
 # LISTAR PRODUCTOS (todos)
 # =====================================================
-def list_products():
+def list_products_v2():
     resp = (
         table(PRODUCTS_TABLE)
         .select("*")
@@ -21,39 +20,59 @@ def list_products():
     return resp.data or []
 
 
+# Alias por compatibilidad, por si algún código antiguo usa list_products()
+def list_products():
+    return list_products_v2()
+
+
 # =====================================================
 # LISTAR CATEGORÍAS
+#  (no asumimos nombre: seleccionamos todo y ordenamos por id)
 # =====================================================
 def list_categories():
     resp = (
         table(CATEGORIES_TABLE)
-        .select("id, name")
-        .order("name")
+        .select("*")
+        .order("id")
         .execute()
     )
     return resp.data or []
 
 
 # =====================================================
-# FILTRADO AVANZADO (categoría, precio, nombre)
+# LISTAR PRODUCTOS POR CATEGORÍA
+# =====================================================
+def list_products_by_category(category_id: str):
+    if not category_id:
+        return list_products_v2()
+
+    resp = (
+        table(PRODUCTS_TABLE)
+        .select("*")
+        .eq("category_id", category_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return resp.data or []
+
+
+# =====================================================
+# FILTRADO AVANZADO
+#  (category_id, rango de precios, búsqueda por nombre)
 # =====================================================
 def filter_products(category_id=None, min_price=None, max_price=None, search=None):
     q = table(PRODUCTS_TABLE).select("*")
 
-    # filtro por categoría
     if category_id:
         q = q.eq("category_id", category_id)
 
-    # búsqueda por texto (nombre o descripción)
     if search:
-        # Supabase: ilike → case-insensitive (SQL LIKE)
+        # asumimos campo name (si luego vemos que no existe, lo ajustamos)
         q = q.ilike("name", f"%{search}%")
 
-    # precio mínimo
     if min_price is not None:
         q = q.gte("price_final", min_price)
 
-    # precio máximo
     if max_price is not None:
         q = q.lte("price_final", max_price)
 
@@ -62,7 +81,7 @@ def filter_products(category_id=None, min_price=None, max_price=None, search=Non
 
 
 # =====================================================
-# OBTENER PRODUCTO POR ID
+# OBTENER PRODUCTO POR ID (usa id, NO product_id)
 # =====================================================
 def get_product_v2(product_id: str):
     resp = (
