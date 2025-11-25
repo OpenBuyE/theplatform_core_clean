@@ -1,122 +1,131 @@
 # backend_core/services/product_repository_v2.py
 
 from backend_core.services.supabase_client import table
+from datetime import datetime
 
 PRODUCTS_TABLE = "products_v2"
 CATEGORIES_TABLE = "categorias_v2"
+PROVIDERS_TABLE = "ca_operators"   # si tus proveedores van aquí
 
 
-# =======================================================
-# LISTAR CATEGORÍAS (usa tus columnas exactas)
-# =======================================================
+# ---------------------------------------------------------
+# LISTAR CATEGORÍAS
+# ---------------------------------------------------------
 def list_categories():
-    try:
-        resp = (
-            table(CATEGORIES_TABLE)
-            .select("*")
-            .order("nombre", desc=False)
-            .execute()
-        )
-        rows = resp.data or []
-
-        # Normalizamos salida:
-        normalized = []
-        for r in rows:
-            normalized.append({
-                "id": r.get("id"),
-                "name": r.get("nombre"),         # ← nombre REAL
-                "description": r.get("descripcion"),
-                "is_active": r.get("is_active"),
-                "raw": r,
-            })
-
-        return normalized
-
-    except Exception as e:
-        print("ERROR en list_categories:", e)
-        return []
+    resp = (
+        table(CATEGORIES_TABLE)
+        .select("id, nombre, descripcion, is_active")
+        .order("nombre")
+        .execute()
+    )
+    return resp.data or []
 
 
-# =======================================================
+# ---------------------------------------------------------
 # LISTAR PRODUCTOS
-# =======================================================
+# ---------------------------------------------------------
 def list_products_v2():
-    try:
-        resp = (
-            table(PRODUCTS_TABLE)
-            .select("*")
-            .order("created_at", desc=True)
-            .execute()
-        )
-        return resp.data or []
-    except Exception as e:
-        print("ERROR list_products_v2:", e)
-        return []
+    resp = (
+        table(PRODUCTS_TABLE)
+        .select("*")
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return resp.data or []
 
 
-# =======================================================
-# FILTRAR PRODUCTOS POR CATEGORIA
-# =======================================================
+# ---------------------------------------------------------
+# FILTRAR PRODUCTOS POR CATEGORÍA
+# ---------------------------------------------------------
 def filter_products(category_id: str):
-    try:
-        resp = (
-            table(PRODUCTS_TABLE)
-            .select("*")
-            .eq("category_id", category_id)
-            .order("created_at", desc=True)
-            .execute()
-        )
-        return resp.data or []
-    except Exception as e:
-        print("ERROR filter_products:", e)
-        return []
+    resp = (
+        table(PRODUCTS_TABLE)
+        .select("*")
+        .eq("category_id", category_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return resp.data or []
 
 
-# =======================================================
+# ---------------------------------------------------------
 # OBTENER PRODUCTO POR ID
-# =======================================================
+# ---------------------------------------------------------
 def get_product_v2(product_id: str):
-    try:
-        resp = (
-            table(PRODUCTS_TABLE)
-            .select("*")
-            .eq("id", product_id)
-            .single()
-            .execute()
-        )
-        return resp.data
-    except Exception as e:
-        print("ERROR get_product_v2:", e)
-        return None
+    resp = (
+        table(PRODUCTS_TABLE)
+        .select("*")
+        .eq("id", product_id)
+        .single()
+        .execute()
+    )
+    return resp.data
 
 
-# =======================================================
-# CREAR PRODUCTO
-# =======================================================
-def create_product(product: dict):
+# ---------------------------------------------------------
+# OBTENER CATEGORÍA POR ID (FALTANTE)
+# ---------------------------------------------------------
+def get_category_by_id(category_id: str):
+    resp = (
+        table(CATEGORIES_TABLE)
+        .select("id, nombre, descripcion, is_active")
+        .eq("id", category_id)
+        .single()
+        .execute()
+    )
+    return resp.data
+
+
+# ---------------------------------------------------------
+# OBTENER PROVIDER POR ID (FALTANTE)
+# ---------------------------------------------------------
+def get_provider_by_id(provider_id: str):
     """
-    product = {
-        "organization_id": "111...",
-        "provider_id": "222...",
-        "sku": "...",
-        "name": "...",
-        "description": "...",
-        "price_final": 100,
-        "price_base": 82.64,
-        "vat_rate": 21,
-        "currency": "EUR",
-        "image_url": "https://...",
-        "category_id": "...",
-        "active": True
+    Si tus proveedores están en ca_operators:
+    puedes ajustar campos según tu estructura.
+    """
+    resp = (
+        table(PROVIDERS_TABLE)
+        .select("id, name, kyc_status, created_at")
+        .eq("id", provider_id)
+        .single()
+        .execute()
+    )
+    return resp.data
+
+
+# ---------------------------------------------------------
+# CREAR PRODUCTO PRO
+# ---------------------------------------------------------
+def create_product(
+    name: str,
+    description: str,
+    price_final: float,
+    price_base: float,
+    vat_rate: float,
+    currency: str,
+    sku: str,
+    image_url: str,
+    organization_id: str,
+    provider_id: str,
+    category_id: str,
+):
+    payload = {
+        "id": None,  # autogen UUID
+        "organization_id": organization_id,
+        "provider_id": provider_id,
+        "sku": sku,
+        "name": name,
+        "description": description,
+        "price_final": price_final,
+        "price_base": price_base,
+        "vat_rate": vat_rate,
+        "currency": currency,
+        "image_url": image_url,
+        "active": True,
+        "category_id": category_id,
+        "created_at": datetime.utcnow().isoformat(),
     }
-    """
-    try:
-        resp = (
-            table(PRODUCTS_TABLE)
-            .insert(product)
-            .execute()
-        )
-        return resp.data
-    except Exception as e:
-        print("ERROR create_product:", e)
-        return None
+
+    resp = table(PRODUCTS_TABLE).insert(payload).execute()
+    return resp.data
