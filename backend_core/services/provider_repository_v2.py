@@ -1,101 +1,48 @@
-import typing as t
+# backend_core/services/provider_repository_v2.py
+
+from typing import List, Dict, Any, Optional
 from backend_core.services.supabase_client import table
-from backend_core.services.operator_repository import (
-    get_operator_allowed_countries,
-    ensure_country_filter,
-)
-
-# =========================================================
-# HELPERS INTERNOS
-# =========================================================
-
-def _safe_data(resp):
-    """Compatibilidad con diferentes formatos del wrapper REST."""
-    if hasattr(resp, "data"):
-        return resp.data
-    return resp.get("data")
 
 
-# =========================================================
-# PROVIDERS — CRUD + MULTIPAÍS
-# =========================================================
+def list_providers_v2() -> List[Dict[str, Any]]:
+    rows = table("providers_v2").select("*").order("created_at", desc=True).execute()
+    return rows or []
 
-def list_providers(operator_id: str) -> t.List[dict]:
+
+def list_providers_safe(country_codes: Optional[list[str]] = None) -> List[Dict[str, Any]]:
     """
-    Lista todos los proveedores visibles por el operador,
-    respetando los países asignados.
+    Versión 'safe' para UI: solo proveedores activos, opcionalmente filtrados por país.
+    Asumimos columna active y opcional country_code.
     """
-    allowed = get_operator_allowed_countries(operator_id)
+    q = table("providers_v2").select("*").eq("active", True)
 
-    qb = table("providers_v2").select("*")
-    qb = ensure_country_filter(qb, allowed)
+    if country_codes:
+        # si tienes campo country_code, puedes hacer or_ con ellos; aquí lo dejamos simple
+        # q = q.in_("country_code", country_codes)
+        pass
 
-    resp = qb.execute()
-    return _safe_data(resp) or []
-
-
-def get_provider_by_id(provider_id: str) -> t.Optional[dict]:
-    """
-    Devuelve un proveedor por ID.
-    (Acceso sin filtro porque es detalle directo).
-    """
-    resp = (
-        table("providers_v2")
-        .select("*")
-        .eq("id", provider_id)
-        .single()
-        .execute()
-    )
-    return _safe_data(resp)
+    rows = q.order("created_at", desc=True).execute()
+    return rows or []
 
 
-def create_provider(data: dict) -> dict:
-    """
-    Crea un proveedor nuevo.
-    data debe incluir:
-        name, email, phone, organization_id, country_code, active
-    Opcional: logo_url, reputación, shipping_template
-    """
-    resp = table("providers_v2").insert(data).execute()
-    return _safe_data(resp)
+def get_provider(provider_id: str) -> Optional[Dict[str, Any]]:
+    rows = table("providers_v2").select("*").eq("id", provider_id).execute()
+    return rows[0] if rows else None
 
 
-def update_provider(provider_id: str, updates: dict) -> dict:
-    """
-    Actualiza proveedor.
-    """
-    resp = (
-        table("providers_v2")
-        .update(updates)
-        .eq("id", provider_id)
-        .execute()
-    )
-    return _safe_data(resp)
+def create_provider(payload: Dict[str, Any]) -> Dict[str, Any]:
+    rows = table("providers_v2").insert(payload).execute()
+    if not rows:
+        raise RuntimeError("No se pudo crear el proveedor.")
+    return rows[0]
 
 
-def disable_provider(provider_id: str) -> dict:
-    """
-    Desactiva proveedor sin eliminarlo.
-    """
-    resp = (
-        table("providers_v2")
-        .update({"active": False})
-        .eq("id", provider_id)
-        .execute()
-    )
-    return _safe_data(resp)
+def update_provider(provider_id: str, **fields) -> Dict[str, Any]:
+    rows = table("providers_v2").update(fields).eq("id", provider_id).execute()
+    if not rows:
+        raise RuntimeError("No se pudo actualizar el proveedor.")
+    return rows[0]
 
 
-def delete_provider(provider_id: str) -> dict:
-    """
-    Elimina proveedor definitivamente.
-    (Se recomienda desactivar en producción.)
-    """
-    resp = (
-        table("providers_v2")
-        .delete()
-        .eq("id", provider_id)
-        .execute()
-    )
-    return _safe_data(resp)
-
+def disable_provider(provider_id: str):
+    table("providers_v2").update({"active": False}).eq("id", provider_id).execute()
