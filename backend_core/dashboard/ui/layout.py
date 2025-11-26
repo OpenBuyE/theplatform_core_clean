@@ -30,4 +30,9 @@ def render_sidebar():
     """
     st.sidebar.markdown("### Menú")
     # No añadir más contenido aquí por ahora.
-    # El menú principal debe definirse siempre
+    # El menú principal se define en app.py
+
+
+# ---------------------------------------------------------
+#  FIN DEL ARCHIVO — IMPORTANTE PARA EVITAR ERRORES
+# ---------------------------------------------------------
