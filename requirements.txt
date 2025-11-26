@@ -4,4 +4,4 @@ postgrest
 gotrue
 storage3
 supafunc
-bcrypt==4.1.2
+bcrypt==3.2.2
