@@ -1,64 +1,63 @@
 # backend_core/services/audit_repository.py
 
-from __future__ import annotations
-from datetime import datetime
-from typing import Any, Optional
+from typing import List, Dict, Any, Optional
 
 from backend_core.services.supabase_client import table
 
-AUDIT_TABLE = "ca_audit_logs"
 
+# ======================================================
+# LOGS GENERALES
+# ======================================================
 
-# ============================================================
-#  LOG_EVENT — función principal usada por TODO el backend
-# ============================================================
-
-def log_event(
-    action: str,
-    session_id: Optional[str] = None,
-    user_id: Optional[str] = None,
-    metadata: Optional[dict] = None,
-) -> None:
+def get_all_logs_for_operator(operator_id: str) -> List[Dict[str, Any]]:
     """
-    Inserta un evento en la tabla de auditoría ca_audit_logs.
-    Es la función estándar utilizada en:
-      - session_engine
-      - adjudicator_engine
-      - contract_engine
-      - wallet_orchestrator
-      - fintech_routes
-      - dashboard
-      - API internal
+    Devuelve todos los logs relacionados con un operador.
+    Asumimos campo operator_id y opcionalmente country_code, etc.
     """
-
-    data = {
-        "action": action,
-        "session_id": session_id,
-        "user_id": user_id,
-        "metadata": metadata or {},
-        "created_at": datetime.utcnow().isoformat(),
-    }
-
-    r = table(AUDIT_TABLE).insert(data).execute()
-
-    # si Supabase devuelve error → raise
-    if hasattr(r, "error") and r.error:
-        raise RuntimeError(f"Audit log insert failed: {r.error}")
-
-
-# ============================================================
-#  GET_LOGS — utilitario para panel de auditoría
-# ============================================================
-
-def get_logs(limit: int = 200):
-    """
-    Obtiene los últimos eventos de auditoría.
-    """
-    resp = (
-        table(AUDIT_TABLE)
+    q = (
+        table("ca_audit_logs")
         .select("*")
+        .eq("operator_id", operator_id)
         .order("created_at", desc=True)
-        .limit(limit)
-        .execute()
     )
-    return resp.data or []
+    rows = q.execute()
+    return rows or []
+
+
+def get_log_details(log_id: str, operator_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    q = table("ca_audit_logs").select("*").eq("id", log_id)
+    if operator_id:
+        q = q.eq("operator_id", operator_id)
+    rows = q.execute()
+    if not rows:
+        return None
+    return rows[0]
+
+
+# ======================================================
+# LOGS DE ADJUDICACIÓN DETERMINISTA
+# ======================================================
+
+def get_adjudication_log(session_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Devuelve el último log de adjudicación para una sesión.
+    Asumimos que se registra en ca_audit_logs con event_type = 'session_adjudicated'.
+    """
+    q = (
+        table("ca_audit_logs")
+        .select("*")
+        .eq("session_id", session_id)
+        .eq("event_type", "session_adjudicated")
+        .order("created_at", desc=True)
+    )
+    rows = q.execute()
+    if not rows:
+        return None
+    return rows[0]
+
+
+# Compatibilidad con versiones anteriores (engine_monitor antiguo)
+def list_audit_logs() -> List[Dict[str, Any]]:
+    q = table("ca_audit_logs").select("*").order("created_at", desc=True)
+    rows = q.execute()
+    return rows or []
