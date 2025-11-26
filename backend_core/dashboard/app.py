@@ -15,188 +15,81 @@ from backend_core.dashboard.ui.layout import (
 def diagnostic_imports():
     st.sidebar.markdown("### 🔍 Diagnóstico de imports")
 
-    # Operator Dashboard
-    try:
-        from backend_core.dashboard.views.operator_dashboard import render_operator_dashboard
-        st.sidebar.success("Operator Dashboard import OK")
-    except Exception as e:
-        st.sidebar.error(f"Operator Dashboard import FAIL: {e}")
+    views = {
+        "Operator Dashboard": ("operator_dashboard", "render_operator_dashboard"),
+        "Operator Dashboard Pro": ("operator_dashboard_pro", "render_operator_dashboard_pro"),
+        "Parked Sessions": ("park_sessions", "render_park_sessions"),
+        "Active Sessions": ("active_sessions", "render_active_sessions"),
+        "Product Catalog Pro": ("product_catalog_pro", "render_product_catalog_pro"),
+        "Product Details Pro": ("product_details_pro", "render_product_details_pro"),
+        "Product Creator Pro": ("product_creator_pro", "render_product_creator_pro"),
+        "Category Manager Pro": ("category_manager_pro", "render_category_manager_pro"),
+        "Provider Manager Pro": ("provider_manager_pro", "render_provider_manager_pro"),
+        "Admin Seeds": ("admin_seeds", "render_admin_seeds"),
+        "Operator Login": ("operator_login", "render_operator_login"),
+    }
 
-    # Operator Dashboard Pro
-    try:
-        from backend_core.dashboard.views.operator_dashboard_pro import render_operator_dashboard_pro
-        st.sidebar.success("Operator Dashboard PRO import OK")
-    except Exception as e:
-        st.sidebar.error(f"Operator Dashboard PRO import FAIL: {e}")
-
-    # Importar resto de vistas sin bloquear ejecución
-    for mod, func in [
-        ("park_sessions", "render_park_sessions"),
-        ("active_sessions", "render_active_sessions"),
-        ("product_catalog_pro", "render_product_catalog_pro"),
-        ("product_details_pro", "render_product_details_pro"),
-        ("product_creator_pro", "render_product_creator_pro"),
-        ("category_manager_pro", "render_category_manager_pro"),
-        ("provider_manager_pro", "render_provider_manager_pro"),
-        ("admin_seeds", "render_admin_seeds"),
-    ]:
+    for label, (module_name, func_name) in views.items():
         try:
-            __import__(f"backend_core.dashboard.views.{mod}", fromlist=[func])
-        except:
-            pass
+            __import__(f"backend_core.dashboard.views.{module_name}", fromlist=[func_name])
+            st.sidebar.success(f"{label} import OK")
+        except Exception as e:
+            st.sidebar.error(f"{label} import FAIL: {e}")
 
 
 # =========================================================
-# ROUTER PRINCIPAL
+# ROUTER PRINCIPAL — LLAMA A VISTAS
 # =========================================================
 def render_page(page: str):
-    # Importar vistas aquí para aislar errores
+    """
+    Router estable. Si una vista falla al importar o ejecutar,
+    la app NO se cae.
+    """
+
+    def safe_import(module_name, func_name):
+        try:
+            module = __import__(f"backend_core.dashboard.views.{module_name}", fromlist=[func_name])
+            return getattr(module, func_name)
+        except Exception:
+            return None
+
+    routes = {
+        "Parked Sessions": safe_import("park_sessions", "render_park_sessions"),
+        "Active Sessions": safe_import("active_sessions", "render_active_sessions"),
+        "Operator Dashboard": safe_import("operator_dashboard", "render_operator_dashboard"),
+        "Operator Dashboard Pro": safe_import("operator_dashboard_pro", "render_operator_dashboard_pro"),
+        "Product Catalog Pro": safe_import("product_catalog_pro", "render_product_catalog_pro"),
+        "Product Details Pro": safe_import("product_details_pro", "render_product_details_pro"),
+        "Product Creator Pro": safe_import("product_creator_pro", "render_product_creator_pro"),
+        "Category Manager Pro": safe_import("category_manager_pro", "render_category_manager_pro"),
+        "Provider Manager Pro": safe_import("provider_manager_pro", "render_provider_manager_pro"),
+        "Admin Seeds": safe_import("admin_seeds", "render_admin_seeds"),
+        "Operator Login": safe_import("operator_login", "render_operator_login"),
+    }
+
+    # Vista seleccionada
+    render_function = routes.get(page)
+
+    if render_function is None:
+        st.error(f"La vista '{page}' no está disponible.")
+        return
+
+    # Render seguro
     try:
-        from backend_core.dashboard.views.operator_dashboard import render_operator_dashboard
-    except:
-        render_operator_dashboard = None
-
-    try:
-        from backend_core.dashboard.views.operator_dashboard_pro import render_operator_dashboard_pro
-    except:
-        render_operator_dashboard_pro = None
-
-    try:
-        from backend_core.dashboard.views.park_sessions import render_park_sessions
-    except:
-        render_park_sessions = None
-
-    try:
-        from backend_core.dashboard.views.active_sessions import render_active_sessions
-    except:
-        render_active_sessions = None
-
-    try:
-        from backend_core.dashboard.views.product_catalog_pro import render_product_catalog_pro
-    except:
-        render_product_catalog_pro = None
-
-    try:
-        from backend_core.dashboard.views.product_details_pro import render_product_details_pro
-    except:
-        render_product_details_pro = None
-
-    try:
-        from backend_core.dashboard.views.product_creator_pro import render_product_creator_pro
-    except:
-        render_product_creator_pro = None
-
-    try:
-        from backend_core.dashboard.views.category_manager_pro import render_category_manager_pro
-    except:
-        render_category_manager_pro = None
-
-    try:
-        from backend_core.dashboard.views.provider_manager_pro import render_provider_manager_pro
-    except:
-        render_provider_manager_pro = None
-
-    try:
-        from backend_core.dashboard.views.admin_seeds import render_admin_seeds
-    except:
-        render_admin_seeds = None
-
-    # ---------------- ROUTING ----------------
-    if page == "Parked Sessions":
-        if render_park_sessions:
-            try:
-                render_park_sessions()
-            except Exception as e:
-                st.error(f"Error en Parked Sessions: {e}")
+        # PRODUCT DETAILS PRO REQUIERE product_id
+        if page == "Product Details Pro":
+            if "product_details_id" not in st.session_state:
+                st.warning("Seleccione un producto en Product Catalog Pro.")
+            else:
+                render_function(st.session_state["product_details_id"])
         else:
-            st.error("Parked Sessions no disponible")
+            render_function()
 
-    elif page == "Active Sessions":
-        if render_active_sessions:
-            try:
-                render_active_sessions()
-            except Exception as e:
-                st.error(f"Error en Active Sessions: {e}")
-        else:
-            st.error("Active Sessions no disponible")
+    except TypeError as e:
+        st.error(f"Error de argumentos en la vista '{page}': {e}")
 
-    elif page == "Operator Dashboard":
-        if render_operator_dashboard:
-            try:
-                render_operator_dashboard()
-            except Exception as e:
-                st.error(f"Error en Operator Dashboard: {e}")
-        else:
-            st.error("Operator Dashboard no disponible")
-
-    elif page == "Operator Dashboard Pro":
-        if render_operator_dashboard_pro:
-            try:
-                render_operator_dashboard_pro()
-            except Exception as e:
-                st.error(f"Error en Operator Dashboard PRO: {e}")
-        else:
-            st.error("Operator Dashboard PRO no disponible")
-
-    elif page == "Product Catalog Pro":
-        if render_product_catalog_pro:
-            try:
-                render_product_catalog_pro()
-            except Exception as e:
-                st.error(f"Error en Product Catalog Pro: {e}")
-        else:
-            st.error("Product Catalog Pro no disponible")
-
-    elif page == "Product Details Pro":
-        if render_product_details_pro:
-            try:
-                if "product_details_id" not in st.session_state:
-                    st.warning("Primero seleccione un producto en el Catálogo.")
-                else:
-                    render_product_details_pro(st.session_state["product_details_id"])
-            except Exception as e:
-                st.error(f"Error en Product Details Pro: {e}")
-        else:
-            st.error("Product Details Pro no disponible")
-
-    elif page == "Product Creator Pro":
-        if render_product_creator_pro:
-            try:
-                render_product_creator_pro()
-            except Exception as e:
-                st.error(f"Error en Product Creator Pro: {e}")
-        else:
-            st.error("Product Creator Pro no disponible")
-
-    elif page == "Category Manager Pro":
-        if render_category_manager_pro:
-            try:
-                render_category_manager_pro()
-            except Exception as e:
-                st.error(f"Error en Category Manager Pro: {e}")
-        else:
-            st.error("Category Manager Pro no disponible")
-
-    elif page == "Provider Manager Pro":
-        if render_provider_manager_pro:
-            try:
-                render_provider_manager_pro()
-            except Exception as e:
-                st.error(f"Error en Provider Manager Pro: {e}")
-        else:
-            st.error("Provider Manager Pro no disponible")
-
-    elif page == "Admin Seeds":
-        if render_admin_seeds:
-            try:
-                render_admin_seeds()
-            except Exception as e:
-                st.error(f"Error en Admin Seeds: {e}")
-        else:
-            st.error("Admin Seeds no disponible")
-
-    else:
-        st.info("Seleccione una opción del menú.")
+    except Exception as e:
+        st.error(f"Error ejecutando la vista '{page}': {e}")
 
 
 # =========================================================
@@ -209,16 +102,18 @@ def main():
 
     diagnostic_imports()
 
+    # MENU PRINCIPAL
     page = st.sidebar.selectbox(
         "Navigation",
         [
+            "Operator Login",        # LOGIN DEL OPERADOR
+            "Operator Dashboard",
+            "Operator Dashboard Pro",
             "Parked Sessions",
             "Active Sessions",
             "Session Chains",
             "Session History",
             "Audit Logs",
-            "Operator Dashboard",
-            "Operator Dashboard Pro",
             "Product Catalog Pro",
             "Product Details Pro",
             "Product Creator Pro",
