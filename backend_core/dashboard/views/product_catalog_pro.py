@@ -1,65 +1,73 @@
-# backend_core/dashboard/views/product_catalog_pro.py
-
 import streamlit as st
-import math
-
 from backend_core.services.product_repository_v2 import (
     list_products_v2,
-    list_categories,
     filter_products,
+    list_categories,
+    list_providers_v2,
 )
 
-# ==========================================================
-#   PRODUCT CATALOG PRO
-# ==========================================================
 def render_product_catalog_pro():
-    st.title("📦 Catálogo Profesional de Productos")
+    st.title("📦 Catálogo de Productos")
 
     # ================================
-    #  Sidebar de Categorías
+    # Sidebar de Categorías
     # ================================
     categories = list_categories()
-    category_names = ["Todas"] + [c["name"] for c in categories]
+
+    # Las categorías vienen con campo "nombre"
+    category_names = ["Todas"] + [c["nombre"] for c in categories]
 
     selected_cat_name = st.selectbox("Categoría", category_names)
 
+    # Obtener category_id si no es “Todas”
     if selected_cat_name == "Todas":
-        products = list_products_v2()
+        selected_category_id = None
     else:
-        selected = next(c for c in categories if c["name"] == selected_cat_name)
-        products = filter_products(selected["id"])
+        selected_category_id = next(
+            (c["id"] for c in categories if c["nombre"] == selected_cat_name),
+            None,
+        )
 
-    if not products:
-        st.info("No hay productos disponibles en esta categoría.")
-        return
+    # ================================
+    # Sidebar de Proveedores
+    # ================================
+    providers = list_providers_v2()
+    provider_names = ["Todos"] + [p["name"] for p in providers]
 
-    # =======================================
-    #  GRID DE PRODUCTOS (4 columnas)
-    # =======================================
-    cols_per_row = 4
-    num_rows = math.ceil(len(products) / cols_per_row)
+    selected_prov_name = st.selectbox("Proveedor", provider_names)
 
-    for row in range(num_rows):
-        cols = st.columns(cols_per_row)
+    if selected_prov_name == "Todos":
+        selected_provider_id = None
+    else:
+        selected_provider_id = next(
+            (p["id"] for p in providers if p["name"] == selected_prov_name),
+            None,
+        )
 
-        for col_idx in range(cols_per_row):
-            idx = row * cols_per_row + col_idx
-            if idx >= len(products):
-                break
+    # ================================
+    # Cargar productos filtrados
+    # ================================
+    products = filter_products(
+        category_id=selected_category_id,
+        provider_id=selected_provider_id,
+    )
 
-            p = products[idx]
+    st.write(f"### Resultados: {len(products)} productos encontrados")
 
-            with cols[col_idx]:
-                st.image(
-                    p.get("image_url", "https://via.placeholder.com/300"),
-                    use_column_width=True,
-                )
-                st.markdown(f"### {p['name']}")
+    # ================================
+    # Render Cards
+    # ================================
+    cols = st.columns(3)
 
-                st.write(f"💶 Precio: **{p['price_final']} {p.get('currency','EUR')}**")
-
-                # Botón abrir ficha
-                if st.button("🔍 Ver ficha", key=f"view_{p['id']}"):
-                    st.session_state["product_view_id"] = p["id"]
-                    st.session_state["navigate_to"] = "Product Details Pro"
-                    st.rerun()
+    for idx, product in enumerate(products):
+        col = cols[idx % 3]
+        with col:
+            st.image(product.get("image_url"), use_column_width=True)
+            st.subheader(product.get("name"))
+            st.write(f"SKU: {product.get('sku')}")
+            st.write(f"Precio: {product.get('price_final')} {product.get('currency')}")
+            st.write(f"Categoría: {product.get('category_id')}")
+            st.write(f"Proveedor: {product.get('provider_id')}")
+            if st.button("Ver Ficha", key=f"view_{product['id']}"):
+                st.session_state["product_details_id"] = product["id"]
+                st.experimental_rerun()
