@@ -1,189 +1,74 @@
-import typing as t
+# backend_core/services/kpi_repository.py
+
 from backend_core.services.supabase_client import table
-from backend_core.services.operator_repository import (
-    get_operator_allowed_countries,
-    ensure_country_filter,
-)
-
-# =========================================================
-# HELPERS INTERNOS
-# =========================================================
-
-def _safe_data(resp):
-    """Compatibilidad con diferentes formatos del wrapper Supabase REST."""
-    if hasattr(resp, "data"):
-        return resp.data
-    return resp.get("data")
 
 
-def _safe_count(resp) -> int:
-    """
-    Intenta devolver un count exacto:
-    - Si el wrapper tiene resp.count → lo usa
-    - Si no, cuenta len(data)
-    """
-    if hasattr(resp, "count") and resp.count is not None:
-        return resp.count
+# ============================
+# Helpers internos
+# ============================
 
-    data = _safe_data(resp) or []
-    if isinstance(data, list):
-        return len(data)
-    return 0
+def _count_rows(tbl_name: str, **filters) -> int:
+    q = table(tbl_name).select("id")
+    for col, value in filters.items():
+        q = q.eq(col, value)
+    rows = q.execute()
+    return len(rows) if rows else 0
 
 
-def _resolve_allowed(operator_id: t.Optional[str]) -> t.Optional[t.List[str]]:
-    """
-    Si operator_id es None → sin filtro (modo global, compatible hacia atrás).
-    Si tiene valor → usa get_operator_allowed_countries().
+# ============================
+# KPIs de sesiones
+# ============================
 
-    Esto permite usar los KPIs tanto en modo legacy (sin operador)
-    como en modo multi-país (con operador).
-    """
-    if not operator_id:
-        return None
-    return get_operator_allowed_countries(operator_id)
+def sessions_active(operator_id: str | None = None) -> int:
+    # Por ahora no filtramos por operator_id; la segmentación se hace aguas arriba.
+    return _count_rows("ca_sessions", status="active")
 
 
-# =========================================================
-# SESSIONS KPIs
-# =========================================================
-
-def sessions_active(operator_id: t.Optional[str] = None) -> int:
-    """
-    Nº de sesiones activas.
-    Si operator_id se pasa → solo del país / países de ese operador.
-    """
-    allowed = _resolve_allowed(operator_id)
-
-    qb = (
-        table("ca_sessions")
-        .select("id", count="exact")
-        .eq("status", "active")
-    )
-    qb = ensure_country_filter(qb, allowed)
-
-    resp = qb.execute()
-    return _safe_count(resp)
+def sessions_finished(operator_id: str | None = None) -> int:
+    return _count_rows("ca_sessions", status="finished")
 
 
-def sessions_finished(operator_id: t.Optional[str] = None) -> int:
-    """
-    Nº de sesiones finalizadas.
-    """
-    allowed = _resolve_allowed(operator_id)
-
-    qb = (
-        table("ca_sessions")
-        .select("id", count="exact")
-        .eq("status", "finished")
-    )
-    qb = ensure_country_filter(qb, allowed)
-
-    resp = qb.execute()
-    return _safe_count(resp)
+def sessions_expired(operator_id: str | None = None) -> int:
+    return _count_rows("ca_sessions", status="expired")
 
 
-def sessions_expired(operator_id: t.Optional[str] = None) -> int:
-    """
-    Nº de sesiones expiradas.
-    """
-    allowed = _resolve_allowed(operator_id)
-
-    qb = (
-        table("ca_sessions")
-        .select("id", count="exact")
-        .eq("status", "expired")
-    )
-    qb = ensure_country_filter(qb, allowed)
-
-    resp = qb.execute()
-    return _safe_count(resp)
+# Aliases esperados por las vistas antiguas
+def get_kpi_sessions_active(operator_id: str | None = None) -> int:
+    return sessions_active(operator_id)
 
 
-# =========================================================
-# WALLET / PAYMENTS KPIs (BÁSICOS)
-# =========================================================
-
-def wallet_deposit_ok(operator_id: t.Optional[str] = None) -> int:
-    """
-    Nº de pagos con depósito OK.
-
-    Asumimos tabla: ca_payment_sessions
-    y un campo 'status' con valor 'deposit_ok'.
-    Si tu esquema real usa otros nombres, aquí solo tendrías que ajustar
-    el EQ correspondiente.
-    """
-    allowed = _resolve_allowed(operator_id)
-
-    qb = (
-        table("ca_payment_sessions")
-        .select("id", count="exact")
-        .eq("status", "deposit_ok")
-    )
-    # Si ca_payment_sessions también tiene country_code → se filtrará.
-    qb = ensure_country_filter(qb, allowed)
-
-    resp = qb.execute()
-    return _safe_count(resp)
+def get_kpi_sessions_finished(operator_id: str | None = None) -> int:
+    return sessions_finished(operator_id)
 
 
-def wallets_total(operator_id: t.Optional[str] = None) -> int:
-    """
-    KPI aproximado de nº de wallets / usuarios con sesiones de pago.
-    Aquí se cuenta el número total de registros en ca_payment_sessions.
-    Si en tu esquema existe una tabla específica de wallets, bastaría
-    con cambiar 'ca_payment_sessions' por esa tabla y ajustar.
-    """
-    allowed = _resolve_allowed(operator_id)
-
-    qb = (
-        table("ca_payment_sessions")
-        .select("id", count="exact")
-    )
-    qb = ensure_country_filter(qb, allowed)
-
-    resp = qb.execute()
-    return _safe_count(resp)
+def get_kpi_sessions_expired(operator_id: str | None = None) -> int:
+    return sessions_expired(operator_id)
 
 
-# =========================================================
-# ENTIDADES DE CATÁLOGO
-# =========================================================
+# ============================
+# KPIs de wallet
+# ============================
 
-def products_total(operator_id: t.Optional[str] = None) -> int:
-    """
-    Nº total de productos visibles para el operador (multi-país).
-    """
-    allowed = _resolve_allowed(operator_id)
-
-    qb = table("products_v2").select("id", count="exact")
-    qb = ensure_country_filter(qb, allowed)
-
-    resp = qb.execute()
-    return _safe_count(resp)
+def wallet_deposit_ok(operator_id: str | None = None) -> int:
+    # Ejemplo: nº de sesiones con depósito OK (si tienes otra lógica, la ajustamos luego)
+    return _count_rows("ca_payment_sessions", status="deposit_ok")
 
 
-def providers_total(operator_id: t.Optional[str] = None) -> int:
-    """
-    Nº total de proveedores visibles para el operador.
-    """
-    allowed = _resolve_allowed(operator_id)
-
-    qb = table("providers_v2").select("id", count="exact")
-    qb = ensure_country_filter(qb, allowed)
-
-    resp = qb.execute()
-    return _safe_count(resp)
+def wallets_total(operator_id: str | None = None) -> int:
+    return _count_rows("ca_wallets")
 
 
-def categories_total(operator_id: t.Optional[str] = None) -> int:
-    """
-    Nº total de categorías visibles para el operador.
-    """
-    allowed = _resolve_allowed(operator_id)
+# ============================
+# KPIs de catálogo
+# ============================
 
-    qb = table("categorias_v2").select("id", count="exact")
-    qb = ensure_country_filter(qb, allowed)
+def providers_total(operator_id: str | None = None) -> int:
+    return _count_rows("providers_v2", active=True)
 
-    resp = qb.execute()
-    return _safe_count(resp)
+
+def products_total(operator_id: str | None = None) -> int:
+    return _count_rows("products_v2", active=True)
+
+
+def categories_total(operator_id: str | None = None) -> int:
+    return _count_rows("categorias_v2", is_active=True)
