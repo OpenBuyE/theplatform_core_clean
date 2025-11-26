@@ -1,257 +1,158 @@
-import typing as t
+# backend_core/services/session_repository.py
+
 from datetime import datetime, timedelta
+from typing import List, Optional, Dict, Any
 
 from backend_core.services.supabase_client import table
-from backend_core.services.operator_repository import (
-    get_operator_allowed_countries,
-    ensure_country_filter,
-)
-
-# =========================================================
-# HELPERS INTERNOS
-# =========================================================
-
-def _safe_data(resp):
-    """Compatibilidad con posibles formatos del wrapper REST."""
-    if hasattr(resp, "data"):
-        return resp.data
-    return resp.get("data")
 
 
-# =========================================================
-#     SESSION REPOSITORY — ACCESO FILTRADO POR PAÍS
-# =========================================================
+# ============================
+# Helpers
+# ============================
+
+def _now_utc() -> datetime:
+    return datetime.utcnow()
 
 
-# -----------------------------
-# GETTERS PRINCIPALES
-# -----------------------------
-
-def get_session_by_id(session_id: str) -> t.Optional[dict]:
-    resp = (
-        table("ca_sessions")
-        .select("*")
-        .eq("id", session_id)
-        .single()
-        .execute()
-    )
-    return _safe_data(resp)
+def _five_days_from_now() -> datetime:
+    return _now_utc() + timedelta(days=5)
 
 
-def get_sessions(operator_id: str) -> t.List[dict]:
-    allowed = get_operator_allowed_countries(operator_id)
-
-    qb = table("ca_sessions").select("*")
-    qb = ensure_country_filter(qb, allowed)
-
-    resp = qb.execute()
-    return _safe_data(resp) or []
+def _rows(q) -> list[dict]:
+    res = q.execute()
+    return res or []
 
 
-def get_parked_sessions(operator_id: str) -> t.List[dict]:
-    allowed = get_operator_allowed_countries(operator_id)
+# ============================
+# CREACIÓN / MUTACIONES
+# ============================
 
-    qb = (
-        table("ca_sessions")
-        .select("*")
-        .eq("status", "parked")
-    )
-    qb = ensure_country_filter(qb, allowed)
-
-    resp = qb.execute()
-    return _safe_data(resp) or []
-
-
-def get_active_sessions(operator_id: str) -> t.List[dict]:
-    allowed = get_operator_allowed_countries(operator_id)
-
-    qb = (
-        table("ca_sessions")
-        .select("*")
-        .eq("status", "active")
-    )
-    qb = ensure_country_filter(qb, allowed)
-
-    resp = qb.execute()
-    return _safe_data(resp) or []
-
-
-def get_finished_sessions(operator_id: str) -> t.List[dict]:
-    allowed = get_operator_allowed_countries(operator_id)
-
-    qb = (
-        table("ca_sessions")
-        .select("*")
-        .eq("status", "finished")
-    )
-    qb = ensure_country_filter(qb, allowed)
-
-    resp = qb.execute()
-    return _safe_data(resp) or []
-
-
-def get_expired_sessions(operator_id: str) -> t.List[dict]:
-    allowed = get_operator_allowed_countries(operator_id)
-
-    qb = (
-        table("ca_sessions")
-        .select("*")
-        .eq("status", "expired")
-    )
-    qb = ensure_country_filter(qb, allowed)
-
-    resp = qb.execute()
-    return _safe_data(resp) or []
-
-
-# -----------------------------
-# PARTICIPANTS
-# -----------------------------
-
-def get_participants_for_session(session_id: str) -> t.List[dict]:
-    resp = (
-        table("ca_session_participants")
-        .select("*")
-        .eq("session_id", session_id)
-        .execute()
-    )
-    return _safe_data(resp) or []
-
-
-# -----------------------------
-# NEXT SESSION IN SERIES (ROLLING)
-# -----------------------------
-
-def get_next_session_in_series(series_id: str) -> t.Optional[dict]:
-    resp = (
-        table("ca_sessions")
-        .select("*")
-        .eq("series_id", series_id)
-        .eq("status", "parked")
-        .order("created_at", ascending=True)
-        .execute()
-    )
-
-    rows = _safe_data(resp) or []
-    return rows[0] if rows else None
-
-
-# =========================================================
-#     CREATE / UPDATE / STATE CHANGES
-# =========================================================
-
-
-def create_session(
-    product_id: str,
-    module_id: str,
-    series_id: str,
-    aforo: int,
-    country_code: str,
-) -> dict:
+def create_parked_session(product_id: str, capacity: int, series_id: Optional[str] = None) -> str:
     """
-    Crea una sesión nueva (rolling-ready).
+    Crea una sesión en estado 'parked'.
     """
     payload = {
         "product_id": product_id,
-        "module_id": module_id,
-        "series_id": series_id,
-        "aforo": aforo,
+        "aforo": capacity,
         "status": "parked",
-        "country_code": country_code,
-        "created_at": datetime.utcnow().isoformat(),
-        "expires_at": (datetime.utcnow() + timedelta(days=5)).isoformat(),
+        "created_at": _now_utc().isoformat(),
+        "expires_at": _five_days_from_now().isoformat(),
     }
+    if series_id:
+        payload["series_id"] = series_id
 
-    resp = table("ca_sessions").insert(payload).execute()
-    return _safe_data(resp)
+    rows = table("ca_sessions").insert(payload).execute()
+    if not rows:
+        raise RuntimeError("No se pudo crear la sesión parked.")
+    return rows[0]["id"]
 
 
-def activate_session(session_id: str) -> dict:
+def activate_session(session_id: str):
     """
-    Cambia estado a 'active'.
+    Marca una sesión como 'active' y fija activated_at.
     """
-    resp = (
-        table("ca_sessions")
-        .update({"status": "active"})
-        .eq("id", session_id)
-        .execute()
-    )
-    return _safe_data(resp)
+    table("ca_sessions").update(
+        {
+            "status": "active",
+            "activated_at": _now_utc().isoformat(),
+        }
+    ).eq("id", session_id).execute()
 
 
-def finish_session(session_id: str) -> dict:
+def finish_session(session_id: str):
     """
-    Cambia estado a 'finished'.
+    Marca una sesión como 'finished'.
     """
-    resp = (
-        table("ca_sessions")
-        .update({"status": "finished"})
-        .eq("id", session_id)
-        .execute()
-    )
-    return _safe_data(resp)
+    table("ca_sessions").update(
+        {
+            "status": "finished",
+            "finished_at": _now_utc().isoformat(),
+        }
+    ).eq("id", session_id).execute()
 
 
-def expire_session(session_id: str) -> dict:
+def expire_session(session_id: str):
     """
-    Cambia estado a 'expired'.
+    Marca una sesión como 'expired'.
     """
-    resp = (
-        table("ca_sessions")
-        .update({"status": "expired"})
-        .eq("id", session_id)
-        .execute()
-    )
-    return _safe_data(resp)
+    table("ca_sessions").update(
+        {
+            "status": "expired",
+            "expires_at": _now_utc().isoformat(),
+        }
+    ).eq("id", session_id).execute()
 
 
-# =========================================================
-#     EXPIRATION CHECKER (5 DÍAS)
-# =========================================================
+# ============================
+# LECTURAS POR ESTADO
+# ============================
 
-def check_expired_sessions(operator_id: str) -> t.List[dict]:
+def get_parked_sessions(operator_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    q = table("ca_sessions").select("*").eq("status", "parked").order("created_at", desc=True)
+    return _rows(q)
+
+
+def get_active_sessions(operator_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    q = table("ca_sessions").select("*").eq("status", "active").order("created_at", desc=True)
+    return _rows(q)
+
+
+def get_finished_sessions(operator_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    q = table("ca_sessions").select("*").eq("status", "finished").order("finished_at", desc=True)
+    return _rows(q)
+
+
+def get_expired_sessions(operator_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    q = table("ca_sessions").select("*").eq("status", "expired").order("expires_at", desc=True)
+    return _rows(q)
+
+
+def get_scheduled_sessions(operator_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """
-    Devuelve sesiones que YA han expirado según expires_at,
-    pero aún NO están marcadas como expired.
+    Para scheduled_sessions.py – sesiones planificadas futuras.
     """
+    q = table("ca_sessions").select("*").eq("status", "scheduled").order("created_at", desc=True)
+    return _rows(q)
 
-    allowed = get_operator_allowed_countries(operator_id)
 
-    qb = (
+def get_standby_sessions(operator_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Para standby_sessions.py – sesiones en standby/manual.
+    """
+    q = table("ca_sessions").select("*").eq("status", "standby").order("created_at", desc=True)
+    return _rows(q)
+
+
+def get_all_sessions(operator_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    q = table("ca_sessions").select("*").order("created_at", desc=True)
+    return _rows(q)
+
+
+# ============================
+# SERIES / CHAINS
+# ============================
+
+def get_session_series(operator_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Devuelve las series (ca_session_series). Si no existe la tabla,
+    puedes cambiar esto a un DISTINCT series_id sobre ca_sessions.
+    """
+    try:
+        q = table("ca_session_series").select("*").order("created_at", desc=True)
+        return _rows(q)
+    except Exception:
+        # Fallback: series distintas en ca_sessions
+        q = table("ca_sessions").select("series_id").neq("series_id", None)
+        rows = _rows(q)
+        series_ids = sorted({r["series_id"] for r in rows if r.get("series_id")})
+        return [{"id": sid} for sid in series_ids]
+
+
+def get_sessions_by_series(series_id: str, operator_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    q = (
         table("ca_sessions")
         .select("*")
-        .eq("status", "active")  # o parked → depende del modelo exacto
-        .lt("expires_at", datetime.utcnow().isoformat())
+        .eq("series_id", series_id)
+        .order("created_at", desc=True)
     )
-    qb = ensure_country_filter(qb, allowed)
-
-    resp = qb.execute()
-    return _safe_data(resp) or []
-
-
-# =========================================================
-#     HIGH-LEVEL OPERATIONS (OPCIONALES)
-# =========================================================
-
-def increment_participant_count(session_id: str) -> None:
-    """
-    (Opcional) Si usas un contador de participantes.
-    """
-    session = get_session_by_id(session_id)
-    if not session:
-        return
-
-    participants = session.get("participants_count", 0) + 1
-
-    table("ca_sessions").update(
-        {"participants_count": participants}
-    ).eq("id", session_id).execute()
-
-
-def mark_awarded_session(session_id: str, winner_id: str) -> None:
-    """
-    Marca estado adjudicado en logs o campo interno.
-    """
-    table("ca_sessions").update(
-        {"winner_id": winner_id}
-    ).eq("id", session_id).execute()
+    return _rows(q)
