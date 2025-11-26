@@ -2,65 +2,116 @@
 
 import streamlit as st
 
-from backend_core.services.session_repository import get_active_sessions
-from backend_core.services.participant_repository import (
-    add_test_participant,
+from backend_core.services.session_repository import (
+    get_active_sessions,
+    finish_session,
     get_participants_for_session,
 )
-from backend_core.services.adjudicator_engine import adjudicator_engine
-from backend_core.services.product_repository import get_product
+from backend_core.services.product_repository_v2 import get_product_v2
 from backend_core.services.module_repository import get_module_for_session
+from backend_core.services.adjudicator_engine import run_adjudication
+from backend_core.services.audit_repository import log_event
 
 
+# ======================================================================
+# RENDER PRINCIPAL
+# ======================================================================
 def render_active_sessions():
-    st.header("Active Sessions")
+    st.title("🔥 Active Sessions")
 
-    sessions = get_active_sessions()
+    # Operador debe estar logueado
+    operator_id = st.session_state.get("operator_id")
+    if not operator_id:
+        st.error("Debe iniciar sesión como operador.")
+        return
+
+    # ---------------------------------------------------------
+    # Cargar sesiones activas
+    # ---------------------------------------------------------
+    try:
+        sessions = get_active_sessions(operator_id)
+    except Exception as e:
+        st.error(f"Error cargando sesiones activas: {e}")
+        return
+
     if not sessions:
         st.info("No hay sesiones activas.")
         return
 
+    # ---------------------------------------------------------
+    # LISTA DE SESIONES ACTIVAS
+    # ---------------------------------------------------------
     for s in sessions:
-        st.write("### Sesión:", s["id"])
-        st.write(f"- Estado: {s['status']}")
-        st.write(f"- Aforo: {s['pax_registered']} / {s['capacity']}")
-        st.write(f"- Activada en: {s.get('activated_at')}")
+        st.markdown(f"## 🔵 Sesión `{s['id']}`")
 
-        # Producto
-        product = get_product(s["product_id"])
+        st.write(f"- Estado: `{s.get('status')}`")
+        st.write(f"- Aforo: {s.get('pax_registered', 0)} / {s.get('aforo', '?')}")
+        st.write(f"- Creada en: {s.get('created_at')}")
+        st.write(f"- Expira: {s.get('expires_at')}")
+
+        # ---------------------------------------------------------
+        # Producto asociado
+        # ---------------------------------------------------------
+        try:
+            product = get_product_v2(s["product_id"])
+        except:
+            product = None
+
         if product:
-            st.write(f"- Producto: **{product['name']}** — {product['price']}€")
+            st.write(f"- Producto: **{product['name']}** — {product['price_final']} €")
+            if product.get("image_url"):
+                st.image(product["image_url"], width=150)
 
-        # Módulo
-        module = get_module_for_session(s["id"])
+        # ---------------------------------------------------------
+        # Módulo asociado
+        # ---------------------------------------------------------
+        try:
+            module = get_module_for_session(s["id"])
+        except:
+            module = None
+
         if module:
-            st.write(f"- Módulo: **{module['module_code']}** — {module['id']}")
+            st.write(f"- Módulo asignado: **{module.get('module_code')}**")
 
-        st.write("---")
+        st.markdown("---")
 
-        # Botón: añadir participante test
-        if st.button(f"Añadir participante test → sesión {s['id']}"):
-            add_test_participant(s["id"])
-            st.success("Participante de prueba añadido.")
+        # ---------------------------------------------------------
+        # Participantes
+        # ---------------------------------------------------------
+        try:
+            participants = get_participants_for_session(s["id"])
+        except:
+            participants = []
 
-        # Listar participantes
-        participants = get_participants_for_session(s["id"])
+        st.subheader("👥 Participantes")
         if participants:
-            st.write("#### Participantes:")
             for p in participants:
-                awarded_flag = " ✅ (adjudicatario)" if p.get("is_awarded") else ""
-                st.write(f"- {p['id']} — user: {p['user_id']}{awarded_flag}")
+                awarded = " 🏆" if p.get("is_awarded") else ""
+                st.write(f"- `{p['id']}` — user: {p['user_id']}{awarded}")
         else:
-            st.write("Sin participantes todavía.")
+            st.info("Sin participantes todavía.")
 
-        # Botón: forzar adjudicación
-        if st.button(f"Forzar adjudicación → sesión {s['id']}"):
+        # ---------------------------------------------------------
+        # FORZAR ADJUDICACIÓN
+        # ---------------------------------------------------------
+        if st.button(f"⚡ Ejecutar adjudicación → sesión {s['id']}"):
             try:
-                result = adjudicator_engine.run_adjudication(s["id"])
-                st.success(
-                    f"Adjudicación ejecutada. Ganador: {result['winner_participant_id']}"
-                )
-            except Exception as e:
-                st.error(f"Error al adjudicar: {e}")
+                result = run_adjudication(s["id"], operator_id=operator_id)
+                winner = result.get("winner_participant_id")
 
-        st.write("----")
+                log_event("session_adjudicated_manual",
+                          session_id=s["id"],
+                          operator_id=operator_id,
+                          winner=winner)
+
+                st.success(f"Adjudicación ejecutada. Ganador: {winner}")
+
+                # Marcar sesión como finalizada
+                finish_session(s["id"], operator_id)
+
+                st.experimental_rerun()
+
+            except Exception as e:
+                st.error(f"Error ejecutando adjudicación: {e}")
+
+        st.markdown("----")
