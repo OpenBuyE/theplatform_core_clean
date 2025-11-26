@@ -1,191 +1,192 @@
-# backend_core/services/product_repository_v2.py
-
-from datetime import datetime
+import typing as t
 from backend_core.services.supabase_client import table
+from backend_core.services.operator_repository import (
+    get_operator_allowed_countries,
+    ensure_country_filter,
+)
 
-PRODUCTS_TABLE = "products_v2"
-CATEGORIES_TABLE = "categorias_v2"
-PROVIDERS_TABLE = "providers_v2"
+# =========================================================
+# HELPERS INTERNOS
+# =========================================================
+
+def _safe_data(resp):
+    """Compatibilidad con diferentes formatos del wrapper Supabase REST."""
+    if hasattr(resp, "data"):
+        return resp.data
+    return resp.get("data")
 
 
-# ============================================================
-# LISTAR PRODUCTOS
-# ============================================================
-def list_products_v2():
+# =========================================================
+# PRODUCTOS — CRUD + FILTROS MULTIPAÍS
+# =========================================================
+
+def list_products_v2(operator_id: str) -> t.List[dict]:
+    """
+    Lista todos los productos visibles por el operador.
+    """
+    allowed = get_operator_allowed_countries(operator_id)
+
+    qb = table("products_v2").select("*")
+    qb = ensure_country_filter(qb, allowed)
+
+    resp = qb.execute()
+    return _safe_data(resp) or []
+
+
+def get_product_v2(product_id: str) -> t.Optional[dict]:
+    """
+    Devuelve un producto por ID (sin filtro por país — detalle).
+    """
     resp = (
-        table(PRODUCTS_TABLE)
-        .select("*")
-        .order("created_at", desc=True)
-        .execute()
-    )
-    return resp.data or []
-
-
-# ============================================================
-# LISTAR CATEGORÍAS
-# ============================================================
-def list_categories():
-    resp = (
-        table(CATEGORIES_TABLE)
-        .select("*")
-        .order("nombre")
-        .execute()
-    )
-    return resp.data or []
-
-
-# ============================================================
-# LISTAR PROVIDERS
-# ============================================================
-def list_providers_safe():
-    resp = (
-        table(PROVIDERS_TABLE)
-        .select("*")
-        .order("nombre")
-        .execute()
-    )
-    return resp.data or []
-
-
-# ============================================================
-# OBTENER PRODUCTO POR ID
-# ============================================================
-def get_product_v2(product_id: str):
-    resp = (
-        table(PRODUCTS_TABLE)
+        table("products_v2")
         .select("*")
         .eq("id", product_id)
         .single()
         .execute()
     )
-    return resp.data
+    return _safe_data(resp)
 
 
-# ============================================================
-# OBTENER CATEGORÍA POR ID
-# ============================================================
-def get_category_by_id(category_id: str):
+def create_product(data: dict) -> dict:
+    """
+    Crea un producto nuevo.
+    data debe contener:
+        name, description, price_base, vat_rate, price_final,
+        sku, category_id, provider_id, currency, country_code
+    """
+    resp = table("products_v2").insert(data).execute()
+    return _safe_data(resp)
+
+
+def update_product(product_id: str, updates: dict) -> dict:
+    """
+    Actualiza los campos indicados para un producto.
+    """
     resp = (
-        table(CATEGORIES_TABLE)
+        table("products_v2")
+        .update(updates)
+        .eq("id", product_id)
+        .execute()
+    )
+    return _safe_data(resp)
+
+
+# =========================================================
+# FILTROS AVANZADOS (CATÁLOGO PRO)
+# =========================================================
+
+def filter_products(
+    operator_id: str,
+    category_id: t.Optional[str] = None,
+    provider_id: t.Optional[str] = None,
+    min_price: t.Optional[float] = None,
+    max_price: t.Optional[float] = None,
+    text: t.Optional[str] = None,
+) -> t.List[dict]:
+    """
+    Filtro completo usado en Product Catalog Pro.
+    """
+    allowed = get_operator_allowed_countries(operator_id)
+
+    qb = table("products_v2").select("*")
+    qb = ensure_country_filter(qb, allowed)
+
+    if category_id and category_id != "ALL":
+        qb = qb.eq("category_id", category_id)
+
+    if provider_id and provider_id != "ALL":
+        qb = qb.eq("provider_id", provider_id)
+
+    if min_price is not None:
+        qb = qb.gte("price_final", min_price)
+
+    if max_price is not None:
+        qb = qb.lte("price_final", max_price)
+
+    if text:
+        pattern = f"%{text}%"
+        qb = qb.ilike("name", pattern)
+
+    resp = qb.execute()
+    return _safe_data(resp) or []
+
+
+# =========================================================
+# CATEGORÍAS — CRUD
+# =========================================================
+
+def list_categories(operator_id: str) -> t.List[dict]:
+    allowed = get_operator_allowed_countries(operator_id)
+
+    qb = table("categorias_v2").select("*")
+    qb = ensure_country_filter(qb, allowed)
+
+    resp = qb.execute()
+    return _safe_data(resp) or []
+
+
+def get_category_by_id(category_id: str) -> t.Optional[dict]:
+    resp = (
+        table("categorias_v2")
         .select("*")
         .eq("id", category_id)
         .single()
         .execute()
     )
-    return resp.data
+    return _safe_data(resp)
 
 
-# ============================================================
-# OBTENER PROVIDER POR ID
-# ============================================================
-def get_provider_by_id(provider_id: str):
+def create_category(name: str, description: str, country_code: str) -> dict:
+    payload = {
+        "name": name,
+        "description": description,
+        "country_code": country_code,
+    }
+
+    resp = table("categorias_v2").insert(payload).execute()
+    return _safe_data(resp)
+
+
+def update_category(category_id: str, updates: dict) -> dict:
     resp = (
-        table(PROVIDERS_TABLE)
+        table("categorias_v2")
+        .update(updates)
+        .eq("id", category_id)
+        .execute()
+    )
+    return _safe_data(resp)
+
+
+def delete_category(category_id: str) -> dict:
+    resp = (
+        table("categorias_v2")
+        .delete()
+        .eq("id", category_id)
+        .execute()
+    )
+    return _safe_data(resp)
+
+
+# =========================================================
+# PROVIDERS — GET BÁSICO
+# =========================================================
+
+def list_providers(operator_id: str) -> t.List[dict]:
+    allowed = get_operator_allowed_countries(operator_id)
+
+    qb = table("providers_v2").select("*")
+    qb = ensure_country_filter(qb, allowed)
+
+    resp = qb.execute()
+    return _safe_data(resp) or []
+
+
+def get_provider_by_id(provider_id: str) -> t.Optional[dict]:
+    resp = (
+        table("providers_v2")
         .select("*")
         .eq("id", provider_id)
         .single()
         .execute()
     )
-    return resp.data
-
-
-# ============================================================
-# FILTRADO AVANZADO DE PRODUCTOS
-# ============================================================
-def filter_products(category_id=None, provider_id=None, active_only=False):
-    qb = table(PRODUCTS_TABLE).select("*")
-
-    if category_id:
-        qb = qb.eq("category_id", category_id)
-
-    if provider_id:
-        qb = qb.eq("provider_id", provider_id)
-
-    if active_only:
-        qb = qb.eq("active", True)
-
-    qb = qb.order("created_at", desc=True)
-
-    resp = qb.execute()
-    return resp.data or []
-
-
-# ============================================================
-# CREAR CATEGORÍA
-# ============================================================
-def create_category(nombre: str, descripcion: str = ""):
-    payload = {
-        "nombre": nombre,
-        "descripcion": descripcion,
-        "is_active": True,
-        "created_at": datetime.utcnow().isoformat()
-    }
-
-    resp = table(CATEGORIES_TABLE).execute(
-        method="POST", json=payload
-    )
-    return resp.data
-
-
-# ============================================================
-# ACTUALIZAR CATEGORÍA
-# ============================================================
-def update_category(category_id: str, nombre: str, descripcion: str):
-    payload = {
-        "nombre": nombre,
-        "descripcion": descripcion
-    }
-
-    resp = (
-        table(CATEGORIES_TABLE)
-        .eq("id", category_id)
-        .execute(method="PATCH", json=payload)
-    )
-    return resp.data
-
-
-# ============================================================
-# ELIMINAR CATEGORÍA
-# (no hay DELETE → hacemos soft delete)
-# ============================================================
-def delete_category(category_id: str):
-    payload = {"is_active": False}
-
-    resp = (
-        table(CATEGORIES_TABLE)
-        .eq("id", category_id)
-        .execute(method="PATCH", json=payload)
-    )
-    return resp.data
-
-
-# ============================================================
-# CREAR PRODUCTO
-# ============================================================
-def create_product(
-    name: str,
-    description: str,
-    price_final: float,
-    provider_id: str,
-    organization_id: str,
-    category_id: str = None,
-    image_url: str = None,
-    currency: str = "EUR",
-    sku: str = None
-):
-    payload = {
-        "name": name,
-        "description": description,
-        "price_final": price_final,
-        "provider_id": provider_id,
-        "organization_id": organization_id,
-        "category_id": category_id,
-        "image_url": image_url,
-        "currency": currency,
-        "sku": sku,
-        "active": True,
-        "created_at": datetime.utcnow().isoformat(),
-    }
-
-    resp = table(PRODUCTS_TABLE).execute(method="POST", json=payload)
-    return resp.data
+    return _safe_data(resp)
