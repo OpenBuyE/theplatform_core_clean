@@ -47,14 +47,10 @@ def diagnostic_imports():
 
 
 # =========================================================
-# ROUTER PRINCIPAL — LLAMA A VISTAS
+# ROUTER PRINCIPAL
 # =========================================================
 def render_page(page: str):
-    """
-    Router de páginas. Llama a la vista correspondiente.
-    """
-
-    # Importar vistas aquí para evitar que import rotos bloqueen el menú.
+    # Importar vistas aquí para aislar errores
     try:
         from backend_core.dashboard.views.operator_dashboard import render_operator_dashboard
     except:
@@ -105,41 +101,49 @@ def render_page(page: str):
     except:
         render_admin_seeds = None
 
-
     # ---------------- ROUTING ----------------
-
     if page == "Parked Sessions":
         if render_park_sessions:
-            try: render_park_sessions()
-            except Exception as e: st.error(f"Error en Parked Sessions: {e}")
+            try:
+                render_park_sessions()
+            except Exception as e:
+                st.error(f"Error en Parked Sessions: {e}")
         else:
             st.error("Parked Sessions no disponible")
 
     elif page == "Active Sessions":
         if render_active_sessions:
-            try: render_active_sessions()
-            except Exception as e: st.error(f"Error en Active Sessions: {e}")
+            try:
+                render_active_sessions()
+            except Exception as e:
+                st.error(f"Error en Active Sessions: {e}")
         else:
             st.error("Active Sessions no disponible")
 
     elif page == "Operator Dashboard":
         if render_operator_dashboard:
-            try: render_operator_dashboard()
-            except Exception as e: st.error(f"Error en Operator Dashboard: {e}")
+            try:
+                render_operator_dashboard()
+            except Exception as e:
+                st.error(f"Error en Operator Dashboard: {e}")
         else:
             st.error("Operator Dashboard no disponible")
 
     elif page == "Operator Dashboard Pro":
         if render_operator_dashboard_pro:
-            try: render_operator_dashboard_pro()
-            except Exception as e: st.error(f"Error en Operator Dashboard PRO: {e}")
+            try:
+                render_operator_dashboard_pro()
+            except Exception as e:
+                st.error(f"Error en Operator Dashboard PRO: {e}")
         else:
             st.error("Operator Dashboard PRO no disponible")
 
     elif page == "Product Catalog Pro":
         if render_product_catalog_pro:
-            try: render_product_catalog_pro()
-            except Exception as e: st.error(f"Error en Product Catalog Pro: {e}")
+            try:
+                render_product_catalog_pro()
+            except Exception as e:
+                st.error(f"Error en Product Catalog Pro: {e}")
         else:
             st.error("Product Catalog Pro no disponible")
 
@@ -157,29 +161,37 @@ def render_page(page: str):
 
     elif page == "Product Creator Pro":
         if render_product_creator_pro:
-            try: render_product_creator_pro()
-            except Exception as e: st.error(f"Error en Product Creator Pro: {e}")
+            try:
+                render_product_creator_pro()
+            except Exception as e:
+                st.error(f"Error en Product Creator Pro: {e}")
         else:
             st.error("Product Creator Pro no disponible")
 
     elif page == "Category Manager Pro":
         if render_category_manager_pro:
-            try: render_category_manager_pro()
-            except Exception as e: st.error(f"Error en Category Manager Pro: {e}")
+            try:
+                render_category_manager_pro()
+            except Exception as e:
+                st.error(f"Error en Category Manager Pro: {e}")
         else:
             st.error("Category Manager Pro no disponible")
 
     elif page == "Provider Manager Pro":
         if render_provider_manager_pro:
-            try: render_provider_manager_pro()
-            except Exception as e: st.error(f"Error en Provider Manager Pro: {e}")
+            try:
+                render_provider_manager_pro()
+            except Exception as e:
+                st.error(f"Error en Provider Manager Pro: {e}")
         else:
             st.error("Provider Manager Pro no disponible")
 
     elif page == "Admin Seeds":
         if render_admin_seeds:
-            try: render_admin_seeds()
-            except Exception as e: st.error(f"Error en Admin Seeds: {e}")
+            try:
+                render_admin_seeds()
+            except Exception as e:
+                st.error(f"Error en Admin Seeds: {e}")
         else:
             st.error("Admin Seeds no disponible")
 
@@ -188,7 +200,7 @@ def render_page(page: str):
 
 
 # =========================================================
-# FUNCIÓN QUE main.py NECESITA
+# FUNCIÓN PRINCIPAL QUE main.py NECESITA
 # =========================================================
 def main():
     setup_page()
