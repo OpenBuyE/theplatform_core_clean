@@ -1,113 +1,142 @@
+# backend_core/dashboard/views/operator_dashboard.py
+
 import streamlit as st
+from datetime import datetime
 
 from backend_core.services.kpi_repository import (
-    sessions_active,
-    sessions_finished,
-    sessions_expired,
-    wallet_deposit_ok,
-    wallets_total,
-    providers_total,
-    products_total,
-    categories_total,
+    get_kpi_sessions_active,
+    get_kpi_sessions_finished,
+    get_kpi_sessions_expired,
+    get_kpi_wallets_total,
+    get_kpi_providers_total,
+    get_kpi_products_total,
+    get_kpi_categories_total,
 )
+from backend_core.services.operator_repository import get_operator_info
 
-# ------------------------------------------------------------
-# OPERATOR DASHBOARD (CLÁSICO)
-# Versión Multi-país (usa operator_id del session_state)
-# ------------------------------------------------------------
 
+# ======================================================================
+# RENDER PRINCIPAL
+# ======================================================================
 def render_operator_dashboard():
     st.title("📊 Operator Dashboard")
 
-    # --------------------------------------------------------
-    # REQUIERE LOGIN DE OPERADOR
-    # --------------------------------------------------------
+    # ---------------------------------------------------------
+    # Validación de login
+    # ---------------------------------------------------------
     operator_id = st.session_state.get("operator_id")
-
     if not operator_id:
-        st.warning("⚠️ No hay operador seleccionado. Vaya a 'Login Operadores'.")
+        st.error("Debe iniciar sesión como operador.")
         return
 
-    allowed_countries = st.session_state.get("allowed_countries")
-    role = st.session_state.get("role")
+    # Obtener info del operador (nivel + países)
+    try:
+        operator = get_operator_info(operator_id)
+    except:
+        operator = None
 
-    # Header con info del operador
-    st.markdown(f"**Operador:** `{operator_id}`")
-    st.markdown(f"**Rol:** `{role}`")
+    country_list = operator.get("country_codes", ["ES"]) if operator else ["ES"]
+    role = operator.get("role", "operator") if operator else "operator"
 
-    if allowed_countries is None:
-        st.markdown("**Países:** Acceso Global 🌍")
+    st.write(f"**Operador:** `{operator_id}` — Rol: **{role}**")
+    st.write(f"**Países autorizados:** {', '.join(country_list)}")
+
+    st.markdown("---")
+
+    # ---------------------------------------------------------
+    # Cargar KPIs multi-país filtrados por permisos
+    # ---------------------------------------------------------
+    try:
+        kpi_active = get_kpi_sessions_active(operator_id)
+        kpi_finished = get_kpi_sessions_finished(operator_id)
+        kpi_expired = get_kpi_sessions_expired(operator_id)
+        kpi_wallets = get_kpi_wallets_total(operator_id)
+        kpi_providers = get_kpi_providers_total(operator_id)
+        kpi_products = get_kpi_products_total(operator_id)
+        kpi_categories = get_kpi_categories_total(operator_id)
+    except Exception as e:
+        st.error(f"Error cargando KPIs: {e}")
+        return
+
+    # =========================================================
+    # TARJETAS KPI (estilo corporate limpio)
+    # =========================================================
+    _kpi_row(
+        [
+            ("Sesiones Activas", kpi_active, "#3A6FF7"),
+            ("Finalizadas", kpi_finished, "#20B858"),
+            ("Expiradas", kpi_expired, "#F5A623"),
+        ]
+    )
+
+    _kpi_row(
+        [
+            ("Productos", kpi_products, "#1A3DB5"),
+            ("Categorías", kpi_categories, "#8B5CF6"),
+            ("Proveedores", kpi_providers, "#3A3A3A"),
+        ]
+    )
+
+    st.markdown("---")
+
+    # =========================================================
+    # Vista especializada según rol
+    # =========================================================
+
+    if role in ["admin_master", "admin_global"]:
+        st.subheader("🔧 Panel Administrador (Master)")
+        st.info("Acceso completo a todos los KPIs globales.")
+
+    elif role == "country_admin":
+        st.subheader("🌍 Panel Country Admin")
+        st.info("Acceso a gestión y métricas exclusivamente de sus países.")
+
     else:
-        st.markdown(f"**Países:** {', '.join(allowed_countries)}")
+        st.subheader("👤 Panel Operador")
+        st.info("Acceso limitado al país asignado y KPIs básicos.")
 
-    st.markdown("---")
 
-    # --------------------------------------------------------
-    # KPIs PRINCIPALES
-    # --------------------------------------------------------
-    col1, col2, col3 = st.columns(3)
+# ======================================================================
+# RENDER DE FILAS KPI
+# ======================================================================
+def _kpi_row(kpis):
+    """
+    Renderiza una fila horizontal de tarjetas KPI tipo fintech clean.
+    """
+    cols = st.columns(len(kpis))
+    for idx, (label, value, color) in enumerate(kpis):
+        with cols[idx]:
+            _kpi_card(label, value, color)
 
-    with col1:
-        st.metric(
-            "Sesiones Activas",
-            sessions_active(operator_id)
-        )
 
-    with col2:
-        st.metric(
-            "Sesiones Finalizadas",
-            sessions_finished(operator_id)
-        )
+# ======================================================================
+# TARJETA KPI INDIVIDUAL
+# ======================================================================
+def _kpi_card(label: str, value: int, color: str):
+    """
+    Tarjeta KPI mínima, estilo Revolut/Stripe Dashboard.
+    """
 
-    with col3:
-        st.metric(
-            "Sesiones Expiradas",
-            sessions_expired(operator_id)
-        )
-
-    st.markdown("---")
-
-    # --------------------------------------------------------
-    # KPIs ECONÓMICOS / OPERATIVOS
-    # --------------------------------------------------------
-    col4, col5 = st.columns(2)
-
-    with col4:
-        st.metric(
-            "Depósitos Confirmados",
-            wallet_deposit_ok(operator_id)
-        )
-
-    with col5:
-        st.metric(
-            "Total Wallets",
-            wallets_total(operator_id)
-        )
-
-    st.markdown("---")
-
-    # --------------------------------------------------------
-    # CATALOGO & PROVEEDORES
-    # --------------------------------------------------------
-    col6, col7, col8 = st.columns(3)
-
-    with col6:
-        st.metric(
-            "Productos",
-            products_total(operator_id)
-        )
-
-    with col7:
-        st.metric(
-            "Proveedores",
-            providers_total(operator_id)
-        )
-
-    with col8:
-        st.metric(
-            "Categorías",
-            categories_total(operator_id)
-        )
-
-    st.markdown("---")
-    st.success("Dashboard actualizado con filtrado multi-país.")
+    st.markdown(
+        f"""
+        <div style="
+            background-color: #FFFFFF;
+            border-radius: 12px;
+            padding: 15px;
+            border: 1px solid #E5E5E5;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.06);
+        ">
+            <div style="font-size: 14px; color: {color}; font-weight: 600;">
+                {label}
+            </div>
+            <div style="
+                font-size: 32px;
+                font-weight: 700;
+                margin-top: 8px;
+                color: #1A1A1A;">
+                {value}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
