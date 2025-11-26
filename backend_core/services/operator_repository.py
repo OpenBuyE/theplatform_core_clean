@@ -1,167 +1,98 @@
-# backend_core/services/operator_repository.py
+import typing as t
+from backend_core.services.supabase_client import table
 
-from __future__ import annotations
+# =========================================================
+# MODELO DE ROLES (CONSTANTES)
+# =========================================================
 
-from typing import Optional, Dict, Any, List
-from datetime import datetime
+ROLE_EXTERNAL_AUDITOR = "external_auditor"
+ROLE_VIEWER = "viewer"
+ROLE_OPERATOR_BASIC = "operator_basic"
+ROLE_OPERATOR_PRO = "operator_pro"
+ROLE_ADMIN_MASTER = "admin_master"
+ROLE_SYSTEM_ROOT = "system_root"
 
-from backend_core.services import supabase_client
-from backend_core.models.operator import (
-    Operator,
-    OperatorKycStatus,
-    OperatorKycLog,
-)
-
-
-OPERATORS_TABLE = "ca_operators"
-OPERATORS_KYC_LOGS_TABLE = "ca_operator_kyc_logs"
+GLOBAL_ACCESS_ROLES = {ROLE_ADMIN_MASTER, ROLE_SYSTEM_ROOT}
 
 
-# ------------------------------------------------------
-# CRUD básico de operadores
-# ------------------------------------------------------
+# =========================================================
+# OPERATORS — HELPERS BÁSICOS
+# =========================================================
 
-def create_operator(
-    organization_id: str,
-    name: str,
-    country: Optional[str] = None,
-    legal_person_type: Optional[str] = None,
-) -> Operator:
-    payload = {
-        "organization_id": organization_id,
-        "name": name,
-        "country": country,
-        "legal_person_type": legal_person_type,
-        "kyc_status": OperatorKycStatus.PENDING.value,
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
-    }
-
-    resp = supabase_client.table(OPERATORS_TABLE).insert(payload).execute()
-    row = resp.data[0]
-    return Operator(**row)
-
-
-def get_operator_by_id(operator_id: str) -> Optional[Operator]:
+def get_operator_by_id(operator_id: str) -> t.Optional[dict]:
+    """
+    Devuelve el operador desde ca_operators.
+    """
     resp = (
-        supabase_client.table(OPERATORS_TABLE)
+        table("ca_operators")
         .select("*")
         .eq("id", operator_id)
         .single()
         .execute()
     )
-    if not resp.data:
+    return resp.data if hasattr(resp, "data") else resp.get("data")
+
+
+def operator_has_global_access(operator: dict) -> bool:
+    """
+    Devuelve True si el operador tiene acceso global (rol o flag).
+    """
+    if not operator:
+        return False
+
+    role = operator.get("role")
+    if role in GLOBAL_ACCESS_ROLES:
+        return True
+
+    if operator.get("global_access") is True:
+        return True
+
+    return False
+
+
+def get_operator_allowed_countries(operator_id: str) -> t.Optional[t.List[str]]:
+    """
+    Devuelve lista de países permitidos para el operador.
+    Si tiene acceso global → devuelve None (interpretado como "sin filtro").
+    """
+    operator = get_operator_by_id(operator_id)
+    if not operator:
+        return []
+
+    if operator_has_global_access(operator):
+        # None = sin filtro de país
         return None
-    return Operator(**resp.data)
-
-
-def get_operator_by_organization_id(organization_id: str) -> Optional[Operator]:
-    resp = (
-        supabase_client.table(OPERATORS_TABLE)
-        .select("*")
-        .eq("organization_id", organization_id)
-        .single()
-        .execute()
-    )
-    if not resp.data:
-        return None
-    return Operator(**resp.data)
-
-
-def list_operators() -> List[Operator]:
-    resp = (
-        supabase_client.table(OPERATORS_TABLE)
-        .select("*")
-        .order("created_at")
-        .execute()
-    )
-    rows = resp.data or []
-    return [Operator(**row) for row in rows]
-
-
-def update_operator_mangopay_ids(
-    operator_id: str,
-    mangopay_legal_user_id: Optional[str] = None,
-    mangopay_wallet_id: Optional[str] = None,
-) -> Optional[Operator]:
-    updates: Dict[str, Any] = {
-        "updated_at": datetime.utcnow().isoformat(),
-    }
-    if mangopay_legal_user_id is not None:
-        updates["mangopay_legal_user_id"] = mangopay_legal_user_id
-    if mangopay_wallet_id is not None:
-        updates["mangopay_wallet_id"] = mangopay_wallet_id
 
     resp = (
-        supabase_client.table(OPERATORS_TABLE)
-        .update(updates)
-        .eq("id", operator_id)
-        .execute()
-    )
-
-    if not resp.data:
-        return None
-    return Operator(**resp.data[0])
-
-
-def update_operator_kyc_status(
-    operator_id: str,
-    new_status: OperatorKycStatus,
-    kyc_level: Optional[str] = None,
-) -> Optional[Operator]:
-    updates: Dict[str, Any] = {
-        "kyc_status": new_status.value,
-        "updated_at": datetime.utcnow().isoformat(),
-    }
-    if kyc_level is not None:
-        updates["kyc_level"] = kyc_level
-
-    resp = (
-        supabase_client.table(OPERATORS_TABLE)
-        .update(updates)
-        .eq("id", operator_id)
-        .execute()
-    )
-    if not resp.data:
-        return None
-    return Operator(**resp.data[0])
-
-
-# ------------------------------------------------------
-# KYC Logs
-# ------------------------------------------------------
-
-def log_operator_kyc_event(
-    operator_id: str,
-    event_type: str,
-    mangopay_kyc_id: Optional[str],
-    status: Optional[str],
-    payload: Dict[str, Any],
-) -> OperatorKycLog:
-    row_payload = {
-        "operator_id": operator_id,
-        "event_type": event_type,
-        "mangopay_kyc_id": mangopay_kyc_id,
-        "status": status,
-        "payload": payload,
-        "created_at": datetime.utcnow().isoformat(),
-    }
-
-    resp = (
-        supabase_client.table(OPERATORS_KYC_LOGS_TABLE)
-        .insert(row_payload)
-        .execute()
-    )
-    return OperatorKycLog(**resp.data[0])
-
-
-def list_operator_kyc_logs(operator_id: str) -> List[OperatorKycLog]:
-    resp = (
-        supabase_client.table(OPERATORS_KYC_LOGS_TABLE)
-        .select("*")
+        table("ca_operator_regions")
+        .select("country_code")
         .eq("operator_id", operator_id)
-        .order("created_at", desc=True)
         .execute()
     )
-    rows = resp.data or []
-    return [OperatorKycLog(**row) for row in rows]
+
+    rows = resp.data if hasattr(resp, "data") else resp.get("data") or []
+
+    countries = sorted({row["country_code"] for row in rows if "country_code" in row})
+
+    return countries
+
+
+def ensure_country_filter(query_builder, allowed_countries: t.Optional[t.List[str]]):
+    """
+    Helper genérico para aplicar filtro de país en una QueryBuilder de supabase_client.
+
+    - Si allowed_countries es None → no se aplica filtro (Admin Master / Root).
+    - Si lista vacía → no devuelve nada.
+    - Si tiene valores → aplica un IN("country_code", lista).
+    """
+    if allowed_countries is None:
+        # acceso global → no filtrar por país
+        return query_builder
+
+    if not allowed_countries:
+        # operador sin países asignados → devolver resultado vacío
+        # truco: filtrar por country_code inexistente
+        return query_builder.eq("country_code", "__NO_COUNTRY__")
+
+    # Supabase REST: usar in_ si tu wrapper lo soporta
+    return query_builder.in_("country_code", allowed_countries)
