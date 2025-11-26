@@ -10,27 +10,163 @@ from backend_core.dashboard.ui.layout import (
 )
 
 # =========================================================
+# DEFINICIÓN DE RUTAS (LABEL → módulo + función)
+# =========================================================
+
+ROUTE_DEFS = {
+    # Login / Identidad
+    "Operator Login": ("operator_login", "render_operator_login"),
+
+    # Dashboards
+    "Operator Dashboard": ("operator_dashboard", "render_operator_dashboard"),
+    "Operator Dashboard Pro": ("operator_dashboard_pro", "render_operator_dashboard_pro"),
+
+    # Gestión de operadores
+    "Operator Manager Pro": ("operator_manager_pro", "render_operator_manager_pro"),
+
+    # Sesiones
+    "Parked Sessions": ("park_sessions", "render_park_sessions"),
+    "Scheduled Sessions": ("scheduled_sessions", "render_scheduled_sessions"),
+    "Standby Sessions": ("standby_sessions", "render_standby_sessions"),
+    "Active Sessions": ("active_sessions", "render_active_sessions"),
+    "Session Chains": ("chains", "render_session_chains"),
+    "Session History": ("history_sessions", "render_history_sessions"),
+
+    # Productos / Catálogo
+    "Product Catalog Pro": ("product_catalog_pro", "render_product_catalog_pro"),
+    "Product Details Pro": ("product_details_pro", "render_product_details_pro"),
+    "Product Creator Pro": ("product_creator_pro", "render_product_creator_pro"),
+    "Category Manager Pro": ("category_manager_pro", "render_category_manager_pro"),
+    "Provider Manager Pro": ("provider_manager_pro", "render_provider_manager_pro"),
+    "Products Browser": ("products_browser", "render_products_browser"),
+
+    # Auditoría / Motor / Inspectores
+    "Engine Monitor": ("engine_monitor", "render_engine_monitor"),
+    "Audit Logs": ("audit_logs", "render_audit_logs"),
+    "Module Inspector": ("module_inspector", "render_module_inspector"),
+    "Contract Payment Status": ("contract_payment_status", "render_contract_payment_status"),
+
+    # Admin / Backoffice avanzado
+    "Admin Seeds": ("admin_seeds", "render_admin_seeds"),
+    "Admin Series": ("admin_series", "render_admin_series"),
+    "Admin Users": ("admin_users", "render_admin_users"),
+    "Admin Operators KYC": ("admin_operators_kyc", "render_admin_operators_kyc"),
+    "Admin Engine": ("admin_engine", "render_admin_engine"),
+}
+
+
+# =========================================================
+# HELPERS DE ROL Y MENÚ DINÁMICO
+# =========================================================
+
+def get_current_role() -> str:
+    """
+    Devuelve el rol actual del operador, o 'anonymous' si no hay login.
+    """
+    return st.session_state.get("role", "anonymous")
+
+
+def get_pages_for_role(role: str):
+    """
+    Devuelve la lista de labels de menú visibles para un rol dado.
+    """
+    # Bloques base
+    base_sessions = [
+        "Parked Sessions",
+        "Scheduled Sessions",
+        "Standby Sessions",
+        "Active Sessions",
+        "Session Chains",
+        "Session History",
+    ]
+
+    base_products = [
+        "Product Catalog Pro",
+        "Product Details Pro",
+        "Product Creator Pro",
+        "Category Manager Pro",
+        "Provider Manager Pro",
+        "Products Browser",
+    ]
+
+    base_dashboards = [
+        "Operator Dashboard",
+        "Operator Dashboard Pro",
+    ]
+
+    engine_views = [
+        "Engine Monitor",
+        "Module Inspector",
+        "Contract Payment Status",
+    ]
+
+    audit_views = [
+        "Audit Logs",
+    ]
+
+    admin_views = [
+        "Admin Seeds",
+        "Admin Series",
+        "Admin Users",
+        "Admin Operators KYC",
+        "Admin Engine",
+        "Operator Manager Pro",
+    ]
+
+    # Siempre disponible en la parte superior
+    login_page = ["Operator Login"]
+
+    # Normalizamos rol
+    role = (role or "anonymous").lower()
+
+    if role == "god":
+        pages = login_page + base_dashboards + base_sessions + base_products + engine_views + audit_views + admin_views
+
+    elif role == "admin_master":
+        pages = login_page + base_dashboards + base_sessions + base_products + engine_views + audit_views + admin_views
+
+    elif role == "supervisor":
+        # Asimilamos supervisor ↔ country_admin
+        pages = login_page + base_dashboards + base_sessions + base_products + engine_views + audit_views + [
+            "Operator Manager Pro",
+        ]
+
+    elif role == "auditor":
+        pages = login_page + [
+            "Session History",
+            "Session Chains",
+            "Engine Monitor",
+            "Audit Logs",
+        ]
+
+    elif role == "operator":
+        pages = login_page + base_dashboards + [
+            "Parked Sessions",
+            "Active Sessions",
+            "Session History",
+            "Product Catalog Pro",
+            "Product Details Pro",
+            "Product Creator Pro",
+            "Category Manager Pro",
+            "Provider Manager Pro",
+        ]
+
+    else:
+        # anonymous o rol desconocido
+        pages = login_page
+
+    # Filtramos por rutas realmente definidas
+    pages = [p for p in pages if p in ROUTE_DEFS]
+    return pages
+
+
+# =========================================================
 # DIAGNÓSTICO DE IMPORTS
 # =========================================================
 def diagnostic_imports():
     st.sidebar.markdown("### 🔍 Diagnóstico de imports")
 
-    views = {
-        "Operator Login": ("operator_login", "render_operator_login"),
-        "Operator Dashboard": ("operator_dashboard", "render_operator_dashboard"),
-        "Operator Dashboard Pro": ("operator_dashboard_pro", "render_operator_dashboard_pro"),
-        "Parked Sessions": ("park_sessions", "render_park_sessions"),
-        "Active Sessions": ("active_sessions", "render_active_sessions"),
-        "Product Catalog Pro": ("product_catalog_pro", "render_product_catalog_pro"),
-        "Product Details Pro": ("product_details_pro", "render_product_details_pro"),
-        "Product Creator Pro": ("product_creator_pro", "render_product_creator_pro"),
-        "Category Manager Pro": ("category_manager_pro", "render_category_manager_pro"),
-        "Provider Manager Pro": ("provider_manager_pro", "render_provider_manager_pro"),
-        "Admin Seeds": ("admin_seeds", "render_admin_seeds"),
-        "Operator Manager Pro": ("operator_manager_pro", "render_operator_manager_pro"),
-    }
-
-    for label, (module_name, func_name) in views.items():
+    for label, (module_name, func_name) in ROUTE_DEFS.items():
         try:
             __import__(f"backend_core.dashboard.views.{module_name}", fromlist=[func_name])
             st.sidebar.success(f"{label} import OK")
@@ -54,34 +190,23 @@ def render_page(page: str):
         except Exception:
             return None
 
-    routes = {
-        "Operator Login": safe_import("operator_login", "render_operator_login"),
-        "Operator Dashboard": safe_import("operator_dashboard", "render_operator_dashboard"),
-        "Operator Dashboard Pro": safe_import("operator_dashboard_pro", "render_operator_dashboard_pro"),
-        "Parked Sessions": safe_import("park_sessions", "render_park_sessions"),
-        "Active Sessions": safe_import("active_sessions", "render_active_sessions"),
-        "Product Catalog Pro": safe_import("product_catalog_pro", "render_product_catalog_pro"),
-        "Product Details Pro": safe_import("product_details_pro", "render_product_details_pro"),
-        "Product Creator Pro": safe_import("product_creator_pro", "render_product_creator_pro"),
-        "Category Manager Pro": safe_import("category_manager_pro", "render_category_manager_pro"),
-        "Provider Manager Pro": safe_import("provider_manager_pro", "render_provider_manager_pro"),
-        "Admin Seeds": safe_import("admin_seeds", "render_admin_seeds"),
-        "Operator Manager Pro": safe_import("operator_manager_pro", "render_operator_manager_pro"),
-        # Futuro: Session Chains, Session History, Audit Logs...
-    }
+    if page not in ROUTE_DEFS:
+        st.error(f"La vista '{page}' no está registrada en ROUTE_DEFS.")
+        return
 
-    render_function = routes.get(page)
+    module_name, func_name = ROUTE_DEFS[page]
+    render_function = safe_import(module_name, func_name)
 
     if render_function is None:
-        st.error(f"La vista '{page}' no está disponible.")
+        st.error(f"La vista '{page}' no está disponible (import fallido).")
         return
 
     # Render seguro
     try:
-        # PRODUCT DETAILS PRO REQUIERE product_id
+        # Product Details Pro requiere product_id desde session_state
         if page == "Product Details Pro":
             if "product_details_id" not in st.session_state:
-                st.warning("Seleccione un producto en Product Catalog Pro.")
+                st.warning("Seleccione un producto en Product Catalog Pro para ver detalles.")
             else:
                 render_function(st.session_state["product_details_id"])
         else:
@@ -89,7 +214,6 @@ def render_page(page: str):
 
     except TypeError as e:
         st.error(f"Error de argumentos en la vista '{page}': {e}")
-
     except Exception as e:
         st.error(f"Error ejecutando la vista '{page}': {e}")
 
@@ -104,26 +228,16 @@ def main():
 
     diagnostic_imports()
 
+    # Rol actual (si no hay login → 'anonymous')
+    role = get_current_role()
+
+    # Páginas visibles según rol
+    pages = get_pages_for_role(role)
+
     # MENU PRINCIPAL
     page = st.sidebar.selectbox(
         "Navigation",
-        [
-            "Operator Login",        # LOGIN DEL OPERADOR
-            "Operator Dashboard",
-            "Operator Dashboard Pro",
-            "Operator Manager Pro",
-            "Parked Sessions",
-            "Active Sessions",
-            "Session Chains",
-            "Session History",
-            "Audit Logs",
-            "Product Catalog Pro",
-            "Product Details Pro",
-            "Product Creator Pro",
-            "Category Manager Pro",
-            "Provider Manager Pro",
-            "Admin Seeds",
-        ]
+        pages,
     )
 
     # -----------------------------------------------------
