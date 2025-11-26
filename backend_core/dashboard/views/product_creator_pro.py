@@ -1,104 +1,83 @@
 # backend_core/dashboard/views/product_creator_pro.py
 
 import streamlit as st
+from datetime import datetime
 
 from backend_core.services.product_repository_v2 import (
     create_product,
     list_categories,
+    list_providers_safe,
 )
-
-from backend_core.services.supabase_client import table
-
-# Tabla real de proveedores
-OPERATORS_TABLE = "ca_operators"
-
-
-# ===========================================================
-# Helpers reales
-# ===========================================================
-
-def list_providers():
-    """
-    Lista operadores reales desde ca_operators.
-    Campos esperados:
-        - id
-        - name
-        - legal_name
-    """
-    try:
-        resp = (
-            table(OPERATORS_TABLE)
-            .select("*")
-            .order("name")
-            .execute()
-        )
-        return resp.data or []
-    except Exception:
-        return []
-
 
 # ===========================================================
 # PRODUCT CREATOR PRO
 # ===========================================================
 
 def render_product_creator_pro():
-    st.title("🛠 Product Creator PRO")
+    st.title("🛠️ Product Creator Pro")
+    st.write("Crear un nuevo producto en products_v2")
 
-    st.markdown("Crea productos completos para **products_v2**.")
-
+    # -------------------------------------------------------
+    # CATEGORIES
+    # -------------------------------------------------------
     categories = list_categories()
-    providers = list_providers()
-
-    # Campos principales
-    name = st.text_input("Nombre del producto")
-    sku = st.text_input("SKU (opcional)")
-
-    price_final = st.number_input("Precio final (€)", min_value=0.0, step=0.01)
-    price_base = st.number_input("Precio base (€)", min_value=0.0, step=0.01)
-    vat_rate = st.number_input("IVA (%)", min_value=0.0, step=1.0, value=21.0)
-
-    currency = st.selectbox("Moneda", ["EUR", "USD", "GBP"])
-
-    description = st.text_area("Descripción", height=100)
-
-    # CATEGORY SELECT
-    category_map = {c["categoria"]: c["id"] for c in categories} if categories else {}
-    category_name = st.selectbox("Categoría", ["Sin categoría"] + list(category_map.keys()))
+    category_map = {c["nombre"]: c["id"] for c in categories} if categories else {}
+    category_name = st.selectbox(
+        "Categoría",
+        ["Sin categoría"] + list(category_map.keys())
+    )
     category_id = None if category_name == "Sin categoría" else category_map[category_name]
 
-    # PROVIDER SELECT
-    providers_map = {p.get("name", p["id"]): p["id"] for p in providers}
-    provider_name = st.selectbox("Proveedor", list(providers_map.keys()))
-    provider_id = providers_map[provider_name]
+    # -------------------------------------------------------
+    # PROVIDERS
+    # -------------------------------------------------------
+    providers = list_providers_safe()
+    provider_map = {p["name"]: p["id"] for p in providers} if providers else {}
+    provider_name = st.selectbox(
+        "Proveedor",
+        list(provider_map.keys()) if provider_map else ["Sin proveedores"]
+    )
+    provider_id = provider_map.get(provider_name)
 
-    # Organización fija por ahora
-    organization_id = "11111111-1111-1111-1111-111111111111"
+    st.write("---")
 
-    # Imagen
-    image_url = st.text_input("URL de imagen (Unsplash u otra)")
+    # -------------------------------------------------------
+    # PRODUCT DATA
+    # -------------------------------------------------------
+    name = st.text_input("Nombre del producto")
+    sku = st.text_input("SKU")
+    description = st.text_area("Descripción", height=100)
+    price_final = st.number_input("Precio final (€)", min_value=0.00, format="%.2f")
+    price_base = st.number_input("Precio base (€)", min_value=0.00, format="%.2f")
+    vat_rate = st.number_input("IVA (%)", min_value=0.00, format="%.2f")
+    currency = "EUR"
+    image_url = st.text_input("Imagen URL (opcional)")
 
-    # -------------------------------------
-    # BOTÓN DE CREACIÓN
-    # -------------------------------------
-    if st.button("Crear producto", type="primary"):
-        data = {
-            "organization_id": organization_id,
-            "provider_id": provider_id,
-            "sku": sku or None,
-            "name": name,
-            "description": description or None,
-            "price_final": price_final,
-            "price_base": price_base,
-            "vat_rate": vat_rate,
-            "currency": currency,
-            "image_url": image_url or None,
-            "category_id": category_id,
-        }
+    st.write("---")
 
-        ok = create_product(data)
+    # -------------------------------------------------------
+    # SAVE BUTTON
+    # -------------------------------------------------------
+    if st.button("💾 Crear producto"):
+        if not name or not provider_id:
+            st.error("El nombre y el proveedor son obligatorios.")
+            return
+        
+        ok = create_product(
+            organization_id="11111111-1111-1111-1111-111111111111",
+            provider_id=provider_id,
+            sku=sku,
+            name=name,
+            description=description,
+            price_final=price_final,
+            price_base=price_base,
+            vat_rate=vat_rate,
+            currency=currency,
+            image_url=image_url,
+            category_id=category_id
+        )
 
         if ok:
-            st.success("Producto creado correctamente 🎉")
-            st.balloons()
+            st.success("Producto creado correctamente en products_v2.")
         else:
-            st.error("Error al crear el producto. Revisa los datos o la consola.")
+            st.error("Error al crear el producto. Revisa los logs.")
