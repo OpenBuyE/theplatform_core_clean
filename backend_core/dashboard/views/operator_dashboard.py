@@ -1,93 +1,113 @@
-# backend_core/dashboard/views/operator_dashboard.py
-
 import streamlit as st
 
-from backend_core.services.supabase_client import table
-from backend_core.services.product_repository import get_product
-from backend_core.services.module_repository import get_module_for_session
-from backend_core.services.participant_repository import get_participants_for_session
-from backend_core.services.session_repository import get_session_by_id
+from backend_core.services.kpi_repository import (
+    sessions_active,
+    sessions_finished,
+    sessions_expired,
+    wallet_deposit_ok,
+    wallets_total,
+    providers_total,
+    products_total,
+    categories_total,
+)
 
-
-# =======================================================
-# FETCH SESSIONS FOR OPERATOR
-# =======================================================
-
-def _fetch_sessions(organization_id: str, status: str):
-    """
-    Lee sesiones filtradas por operador y estado.
-    """
-
-    resp = (
-        table("ca_sessions")
-        .select("*")
-        .eq("organization_id", organization_id)
-        .eq("status", status)
-        .order("activated_at" if status == "active" else "created_at")
-        .execute()
-    )
-
-    return resp.data or []
-
-
-# =======================================================
-# MAIN VIEW
-# =======================================================
+# ------------------------------------------------------------
+# OPERATOR DASHBOARD (CLÁSICO)
+# Versión Multi-país (usa operator_id del session_state)
+# ------------------------------------------------------------
 
 def render_operator_dashboard():
-    st.header("Operator Dashboard")
+    st.title("📊 Operator Dashboard")
 
-    org_id = st.text_input("Organization ID")
+    # --------------------------------------------------------
+    # REQUIERE LOGIN DE OPERADOR
+    # --------------------------------------------------------
+    operator_id = st.session_state.get("operator_id")
 
-    if not org_id:
-        st.info("Introduce organization_id para cargar el panel del operador.")
+    if not operator_id:
+        st.warning("⚠️ No hay operador seleccionado. Vaya a 'Login Operadores'.")
         return
 
-    st.subheader("Sesiones activas")
-    _render_sessions(org_id, "active")
+    allowed_countries = st.session_state.get("allowed_countries")
+    role = st.session_state.get("role")
 
-    st.subheader("Sesiones parked")
-    _render_sessions(org_id, "parked")
+    # Header con info del operador
+    st.markdown(f"**Operador:** `{operator_id}`")
+    st.markdown(f"**Rol:** `{role}`")
 
-    st.subheader("Sesiones finalizadas")
-    _render_sessions(org_id, "finished")
+    if allowed_countries is None:
+        st.markdown("**Países:** Acceso Global 🌍")
+    else:
+        st.markdown(f"**Países:** {', '.join(allowed_countries)}")
 
+    st.markdown("---")
 
-# =======================================================
-# RENDER SESSION BLOCKS
-# =======================================================
+    # --------------------------------------------------------
+    # KPIs PRINCIPALES
+    # --------------------------------------------------------
+    col1, col2, col3 = st.columns(3)
 
-def _render_sessions(organization_id: str, status: str):
-    sessions = _fetch_sessions(organization_id, status)
+    with col1:
+        st.metric(
+            "Sesiones Activas",
+            sessions_active(operator_id)
+        )
 
-    if not sessions:
-        st.info(f"No hay sesiones con estado '{status}'.")
-        return
+    with col2:
+        st.metric(
+            "Sesiones Finalizadas",
+            sessions_finished(operator_id)
+        )
 
-    for s in sessions:
-        st.write("----")
-        st.write(f"### Sesión: {s['id']} — Estado: {s['status']}")
+    with col3:
+        st.metric(
+            "Sesiones Expiradas",
+            sessions_expired(operator_id)
+        )
 
-        # Producto
-        product = get_product(s["product_id"])
-        if product:
-            st.write(f"- Producto: **{product['name']}** — {product['price']}€")
+    st.markdown("---")
 
-        # Módulo
-        module = get_module_for_session(s["id"])
-        if module:
-            st.write(f"- Módulo: **{module['module_code']}** ({module['id']})")
-            st.write(f"  Estado módulo: {module['module_status']}")
-            st.write(f"  ¿Tiene adjudicatario?: {module['has_award']}")
+    # --------------------------------------------------------
+    # KPIs ECONÓMICOS / OPERATIVOS
+    # --------------------------------------------------------
+    col4, col5 = st.columns(2)
 
-        # Participantes
-        participants = get_participants_for_session(s["id"])
-        if participants:
-            st.write("#### Participantes")
-            for p in participants:
-                awarded = " ✅" if p.get("is_awarded") else ""
-                st.write(f"- {p['id']} — user {p['user_id']}{awarded}")
-        else:
-            st.write("No hay participantes.")
+    with col4:
+        st.metric(
+            "Depósitos Confirmados",
+            wallet_deposit_ok(operator_id)
+        )
 
-        st.write("----")
+    with col5:
+        st.metric(
+            "Total Wallets",
+            wallets_total(operator_id)
+        )
+
+    st.markdown("---")
+
+    # --------------------------------------------------------
+    # CATALOGO & PROVEEDORES
+    # --------------------------------------------------------
+    col6, col7, col8 = st.columns(3)
+
+    with col6:
+        st.metric(
+            "Productos",
+            products_total(operator_id)
+        )
+
+    with col7:
+        st.metric(
+            "Proveedores",
+            providers_total(operator_id)
+        )
+
+    with col8:
+        st.metric(
+            "Categorías",
+            categories_total(operator_id)
+        )
+
+    st.markdown("---")
+    st.success("Dashboard actualizado con filtrado multi-país.")
