@@ -1,79 +1,101 @@
-# backend_core/services/provider_repository_v2.py
-# =======================================================
-# PROVIDER REPOSITORY V2 — CRUD Completo
-# =======================================================
-
+import typing as t
 from backend_core.services.supabase_client import table
+from backend_core.services.operator_repository import (
+    get_operator_allowed_countries,
+    ensure_country_filter,
+)
 
-PROVIDERS_TABLE = "providers_v2"
-ORG_ID = "11111111-1111-1111-1111-111111111111"
+# =========================================================
+# HELPERS INTERNOS
+# =========================================================
+
+def _safe_data(resp):
+    """Compatibilidad con diferentes formatos del wrapper REST."""
+    if hasattr(resp, "data"):
+        return resp.data
+    return resp.get("data")
 
 
-# -------------------------------------------------------
-# LISTAR TODOS LOS PROVEEDORES
-# -------------------------------------------------------
-def list_providers():
+# =========================================================
+# PROVIDERS — CRUD + MULTIPAÍS
+# =========================================================
+
+def list_providers(operator_id: str) -> t.List[dict]:
+    """
+    Lista todos los proveedores visibles por el operador,
+    respetando los países asignados.
+    """
+    allowed = get_operator_allowed_countries(operator_id)
+
+    qb = table("providers_v2").select("*")
+    qb = ensure_country_filter(qb, allowed)
+
+    resp = qb.execute()
+    return _safe_data(resp) or []
+
+
+def get_provider_by_id(provider_id: str) -> t.Optional[dict]:
+    """
+    Devuelve un proveedor por ID.
+    (Acceso sin filtro porque es detalle directo).
+    """
     resp = (
-        table(PROVIDERS_TABLE)
-        .select("*")
-        .eq("organization_id", ORG_ID)
-        .order("name")
-        .execute()
-    )
-    return resp.data or []
-
-
-# Versión segura utilizada en Product Creator
-def list_providers_safe():
-    try:
-        return list_providers()
-    except:
-        return []
-
-
-# -------------------------------------------------------
-# OBTENER UN PROVEEDOR POR ID
-# -------------------------------------------------------
-def get_provider(provider_id: str):
-    resp = (
-        table(PROVIDERS_TABLE)
+        table("providers_v2")
         .select("*")
         .eq("id", provider_id)
         .single()
         .execute()
     )
-    return resp.data
+    return _safe_data(resp)
 
 
-# -------------------------------------------------------
-# CREAR PROVEEDOR
-# -------------------------------------------------------
-def create_provider(data: dict):
-    resp = table(PROVIDERS_TABLE).insert(data).execute()
-    return resp.data
+def create_provider(data: dict) -> dict:
+    """
+    Crea un proveedor nuevo.
+    data debe incluir:
+        name, email, phone, organization_id, country_code, active
+    Opcional: logo_url, reputación, shipping_template
+    """
+    resp = table("providers_v2").insert(data).execute()
+    return _safe_data(resp)
 
 
-# -------------------------------------------------------
-# ACTUALIZAR PROVEEDOR
-# -------------------------------------------------------
-def update_provider(provider_id: str, data: dict):
+def update_provider(provider_id: str, updates: dict) -> dict:
+    """
+    Actualiza proveedor.
+    """
     resp = (
-        table(PROVIDERS_TABLE)
-        .update(data)
+        table("providers_v2")
+        .update(updates)
         .eq("id", provider_id)
         .execute()
     )
-    return resp.data
+    return _safe_data(resp)
 
 
-# -------------------------------------------------------
-# ELIMINAR PROVEEDOR
-# -------------------------------------------------------
-def delete_provider(provider_id: str):
+def disable_provider(provider_id: str) -> dict:
+    """
+    Desactiva proveedor sin eliminarlo.
+    """
     resp = (
-        table(PROVIDERS_TABLE)
+        table("providers_v2")
+        .update({"active": False})
+        .eq("id", provider_id)
+        .execute()
+    )
+    return _safe_data(resp)
+
+
+def delete_provider(provider_id: str) -> dict:
+    """
+    Elimina proveedor definitivamente.
+    (Se recomienda desactivar en producción.)
+    """
+    resp = (
+        table("providers_v2")
         .delete()
         .eq("id", provider_id)
         .execute()
     )
-    return resp.data
+    return _safe_data(resp)
+
