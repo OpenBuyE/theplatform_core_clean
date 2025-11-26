@@ -145,8 +145,14 @@ def render_page(page: str):
         else: st.error("Error en Product Catalog Pro")
 
     elif page == "Product Details Pro":
-        if render_product_details_pro: render_product_details_pro()
-        else: st.error("Error en Product Details Pro")
+    try:
+        if "product_details_id" not in st.session_state:
+            st.warning("Primero seleccione un producto desde el Catálogo.")
+        else:
+            render_product_details_pro(st.session_state["product_details_id"])
+    except Exception as e:
+        st.error(f"Error en Product Details Pro: {e}")
+
 
     elif page == "Product Creator Pro":
         if render_product_creator_pro: render_product_creator_pro()
