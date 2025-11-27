@@ -6,14 +6,10 @@ from backend_core.services.operator_repository import ensure_country_filter
 
 
 # ============================================================
-# REGISTRO DE EVENTOS (LOG EVENT)
+# REGISTRO DE EVENTOS
 # ============================================================
 
 def log_event(event_type, session_id=None, operator_id=None, metadata=None):
-    """
-    Crea un registro de auditoría.
-    Compatible con todas las versiones previas.
-    """
     record = {
         "event_type": event_type,
         "session_id": session_id,
@@ -21,13 +17,12 @@ def log_event(event_type, session_id=None, operator_id=None, metadata=None):
         "metadata": metadata or {},
         "created_at": datetime.utcnow().isoformat(),
     }
-
     res = table("ca_audit_logs").insert(record).execute()
     return res[0] if res else None
 
 
 # ============================================================
-# OBTENER TODOS LOS LOGS (ADMIN MASTER)
+# CONSULTAS GENERALES
 # ============================================================
 
 def get_all_logs(limit=500):
@@ -40,48 +35,19 @@ def get_all_logs(limit=500):
     )
 
 
-# ============================================================
-# LOGS PARA OPERADOR (FILTRADO POR PAÍS)
-# ============================================================
-
-def get_all_logs_for_operator(operator):
-    """
-    Devuelve logs filtrados por países permitidos para el operador.
-    """
-    field, allowed = ensure_country_filter(operator)
-
+def get_all_logs_for_operator(operator, limit=500):
+    field, countries = ensure_country_filter(operator)
     return (
         table("ca_audit_logs")
         .select("*")
-        .in_(field, allowed)
+        .in_(field, countries)
         .order("created_at", desc=True)
+        .limit(limit)
         .execute()
     )
 
 
-# ============================================================
-# DETALLES DE UN LOG (LEGACY)
-# ============================================================
-
-def get_log_details(log_id):
-    """
-    Devuelve el contenido completo de un log.
-    Necesario para compatibilidad con pantallas antiguas.
-    """
-    return (
-        table("ca_audit_logs")
-        .select("*")
-        .eq("id", log_id)
-        .single()
-        .execute()
-    )
-
-
-# ============================================================
-# LOGS POR SESIÓN
-# ============================================================
-
-def get_logs_for_session(session_id):
+def get_logs_for_session(session_id: str):
     return (
         table("ca_audit_logs")
         .select("*")
@@ -91,11 +57,7 @@ def get_logs_for_session(session_id):
     )
 
 
-# ============================================================
-# LOGS POR TIPO DE EVENTO
-# ============================================================
-
-def get_logs_by_event_type(event_type):
+def get_logs_by_event_type(event_type: str):
     return (
         table("ca_audit_logs")
         .select("*")
@@ -105,13 +67,32 @@ def get_logs_by_event_type(event_type):
     )
 
 
-# ============================================================
-# CONTAR LOGS (KPIs)
-# ============================================================
-
-def count_logs():
+def get_log_details(log_id: str):
     return (
         table("ca_audit_logs")
-        .select("id", count="exact")
+        .select("*")
+        .eq("id", log_id)
+        .single()
         .execute()
     )
+
+
+def get_adjudication_log(session_id: str):
+    """
+    Último log de adjudicación para una sesión.
+    Usado por Session Chains / Session History.
+    """
+    return (
+        table("ca_audit_logs")
+        .select("*")
+        .eq("session_id", session_id)
+        .eq("event_type", "session_adjudicated")
+        .order("created_at", desc=True)
+        .limit(1)
+        .single()
+        .execute()
+    )
+
+
+def count_logs():
+    return table("ca_audit_logs").select("id", count="exact").execute()
