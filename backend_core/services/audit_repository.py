@@ -3,7 +3,7 @@ from backend_core.services.supabase_client import table
 
 
 # ===========================================================
-# 🔹 Registrar evento (estándar)
+# 🔹 Registrar evento estándar
 # ===========================================================
 
 def log_event(
@@ -12,9 +12,6 @@ def log_event(
     session_id: str = None,
     extra: dict = None
 ):
-    """
-    Registra cualquier evento en audit_log.
-    """
     payload = {
         "event_type": event_type,
         "operator_id": operator_id,
@@ -22,18 +19,14 @@ def log_event(
         "timestamp": datetime.utcnow().isoformat(),
         "extra": extra or {},
     }
-
     return table("audit_log").insert(payload).execute()
 
 
 # ===========================================================
-# 🔹 Obtener logs de un operador concreto
+# 🔹 Obtener logs por operador
 # ===========================================================
 
 def get_all_logs_for_operator(operator_id: str):
-    """
-    Devuelve todos los logs filtrados por operador.
-    """
     return (
         table("audit_log")
         .select("*")
@@ -44,13 +37,10 @@ def get_all_logs_for_operator(operator_id: str):
 
 
 # ===========================================================
-# 🔹 Obtener detalles específicos de un log (legacy)
+# 🔹 Obtener detalles de un log concreto
 # ===========================================================
 
 def get_log_details(log_id: str):
-    """
-    Devuelve un único registro de log.
-    """
     return (
         table("audit_log")
         .select("*")
@@ -61,18 +51,34 @@ def get_log_details(log_id: str):
 
 
 # ===========================================================
-# 🔹 UTILIDAD PEDIDA POR ENGINE MONITOR
+# 🔹 Obtener lista de audit logs recientes (Engine Monitor)
 # ===========================================================
 
 def list_audit_logs(limit: int = 200):
-    """
-    Devuelve lista de audit logs recientes.
-    Engine Monitor depende de esta función.
-    """
     return (
         table("audit_log")
         .select("*")
         .order("timestamp", desc=True)
         .limit(limit)
+        .execute()
+    )
+
+
+# ===========================================================
+# 🔹 FUNCIÓN QUE FALTABA (legacy)
+# get_adjudication_log(session_id)
+# ===========================================================
+
+def get_adjudication_log(session_id: str):
+    """
+    Devuelve todos los eventos de adjudicación para una sesión.
+    Muchos módulos antiguos (Session Chains, History) dependen de esto.
+    """
+    return (
+        table("audit_log")
+        .select("*")
+        .eq("session_id", session_id)
+        .eq("event_type", "session_adjudicated")
+        .order("timestamp", desc=True)
         .execute()
     )
