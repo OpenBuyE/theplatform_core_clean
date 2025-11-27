@@ -3,53 +3,26 @@
 from backend_core.services.supabase_client import table
 
 
-# ======================================================
-# PRODUCTOS — LISTADO
-# ======================================================
+# ================================================================
+# 📌 LISTAR PRODUCTOS (versión moderna)
+# ================================================================
 
-def list_products():
+def list_products_v2():
     return (
-        table("ca_products")
+        table("products_v2")
         .select("*")
         .order("created_at", desc=True)
         .execute()
     )
 
 
-# ======================================================
-# FILTRO PARA PRODUCT CATALOG PRO
-# ======================================================
+# ================================================================
+# 📌 OBTENER PRODUCTO POR ID
+# ================================================================
 
-def filter_products(search: str = "", category: str = None):
-    q = table("ca_products").select("*")
-
-    if search:
-        q = q.ilike("name", f"%{search}%")
-
-    if category:
-        q = q.eq("category_id", category)
-
-    return q.order("created_at", desc=True).execute()
-
-
-# ======================================================
-# CRUD PRODUCTOS
-# ======================================================
-
-def create_product(data: dict):
-    """
-    Compatible con el código legacy que llama create_product()
-    """
+def get_product_v2(product_id: str):
     return (
-        table("ca_products")
-        .insert(data)
-        .execute()
-    )
-
-
-def get_product(product_id: str):
-    return (
-        table("ca_products")
+        table("products_v2")
         .select("*")
         .eq("id", product_id)
         .single()
@@ -57,24 +30,65 @@ def get_product(product_id: str):
     )
 
 
-# ======================================================
-# CATEGORÍAS
-# ======================================================
+# ================================================================
+# 📌 CREAR PRODUCTO
+# ================================================================
 
-def list_categories():
+def create_product(data: dict):
+    return table("products_v2").insert(data).execute()
+
+
+# ================================================================
+# 📌 ACTUALIZAR PRODUCTO
+# ================================================================
+
+def update_product(product_id: str, data: dict):
     return (
-        table("ca_categories")
-        .select("*")
-        .order("name", asc=True)
+        table("products_v2")
+        .update(data)
+        .eq("id", product_id)
         .execute()
     )
 
 
+# ================================================================
+# 📌 CATEGORÍAS
+# ================================================================
+
+def list_categories():
+    return (
+        table("product_categories")
+        .select("*")
+        .order("name", desc=False)
+        .execute()
+    )
+
+
+def create_category(data: dict):
+    return table("product_categories").insert(data).execute()
+
+
 def get_category_by_id(category_id: str):
     return (
-        table("ca_categories")
+        table("product_categories")
         .select("*")
         .eq("id", category_id)
         .single()
         .execute()
     )
+
+
+# ================================================================
+# 📌 FILTRO AVANZADO (buscador profesional)
+# ================================================================
+
+def filter_products(text: str = "", category_id: str = None):
+    query = table("products_v2").select("*")
+
+    if text:
+        query = query.ilike("name", f"%{text}%")
+
+    if category_id:
+        query = query.eq("category_id", category_id)
+
+    return query.order("created_at", desc=True).execute()
