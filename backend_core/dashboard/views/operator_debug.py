@@ -1,39 +1,30 @@
 import streamlit as st
-from backend_core.services.supabase_client import table
+from backend_core.services.operator_repository import get_operator_by_email
 
 def render_operator_debug():
-    st.title("🧪 Operator Debug — Ver contenido real de ca_operators")
+    st.title("🛠 Operator Debug")
 
-    st.markdown("Esto muestra **exactamente** lo que devuelve Supabase.")
+    st.markdown("Esta vista permite verificar si el GlobalAdmin existe y si el backend lo puede leer.")
 
-    try:
-        result = table("ca_operators").select("*").execute()
-    except Exception as e:
-        st.error(f"❌ Error ejecutando consulta Supabase: {e}")
-        return
+    st.subheader("Consultar operador por email")
 
-    # Mostrar estructura del objeto
-    st.subheader("Raw result object:")
-    st.write(result)
+    email = st.text_input("Email del operador", "GlobalAdmin")
 
-    # Mostrar .data si existe
-    if hasattr(result, "data"):
-        st.subheader("Resultado en result.data:")
-        st.write(result.data)
+    if st.button("Buscar operador"):
+        try:
+            operator = get_operator_by_email(email)
+        except Exception as e:
+            st.error(f"Error llamando a get_operator_by_email(): {e}")
+            return
 
-    # Mostrar como lista final
-    rows = []
-    if hasattr(result, "data"):
-        rows = result.data or []
-    elif isinstance(result, list):
-        rows = result
-    else:
-        rows = []
+        if operator is None:
+            st.error("❌ No existe ningún operador con ese email.")
+            return
 
-    st.subheader("Filas interpretadas:")
-    st.write(rows)
+        st.success("✅ Operador encontrado")
+        st.json(operator)
 
-    if not rows:
-        st.warning("⚠ Supabase devuelve 0 filas en ca_operators.")
-    else:
-        st.success(f"Hay {len(rows)} filas en ca_operators.")
+    st.markdown("---")
+    st.subheader("Estado de sesión Streamlit")
+
+    st.json(st.session_state)
