@@ -1,172 +1,135 @@
+"""
+Operator Repository — Gestión completa de operadores
+Compatible con el panel profesional v3.
+"""
+
 import bcrypt
-from typing import List, Optional
 from backend_core.services.supabase_client import supabase
 
 
 # ---------------------------------------------------------------------
-# LOGIN ROBUSTO (case-insensitive)
+# OBTENER OPERADOR POR EMAIL
 # ---------------------------------------------------------------------
-def login_operator(email: str, password: str):
-    """
-    Login robusto: insensible a mayúsculas, limpio y seguro.
-    """
+def get_operator_by_email(email: str):
     try:
-        clean_email = email.strip()
-
-        result = (
-            supabase.table("ca_operators")
-            .select("*")
-            .ilike("email", clean_email)
-            .execute()
-        )
-
-        if not result or not result.data:
-            return None
-
-        operator = result.data[0]
-
-        if not operator.get("active", False):
-            return None
-
-        stored_hash = operator.get("password_hash")
-        if not stored_hash:
-            return None
-
-        if isinstance(password, str):
-            password = password.encode("utf-8")
-
-        if bcrypt.checkpw(password, stored_hash.encode("utf-8")):
-            return operator
-
+        result = supabase.table("ca_operators").select("*").eq("email", email).execute()
+        if result and result.data:
+            return result.data[0]
         return None
-
     except Exception as e:
-        print("Error en login_operator:", e)
+        print("Error get_operator_by_email:", e)
         return None
 
 
 # ---------------------------------------------------------------------
-# OBTENER INFO BÁSICA
+# OBTENER OPERADOR POR ID
 # ---------------------------------------------------------------------
-def get_operator_info(operator_id: str):
+def get_operator_by_id(operator_id: str):
     try:
-        result = (
-            supabase.table("ca_operators")
-            .select("*")
-            .eq("id", operator_id)
-            .single()
-            .execute()
-        )
-        return result.data
-    except Exception:
+        result = supabase.table("ca_operators").select("*").eq("id", operator_id).execute()
+        if result and result.data:
+            return result.data[0]
+        return None
+    except Exception as e:
+        print("Error get_operator_by_id:", e)
         return None
 
 
 # ---------------------------------------------------------------------
-# LISTA COMPLETA DE OPERADORES
+# LISTAR OPERADORES
 # ---------------------------------------------------------------------
 def list_operators():
     try:
-        result = (
-            supabase.table("ca_operators")
-            .select("*")
-            .order("email", desc=False)
-            .execute()
-        )
-        return result.data or []
-    except Exception:
+        result = supabase.table("ca_operators").select("*").order("full_name").execute()
+        return result.data if result and result.data else []
+    except Exception as e:
+        print("Error list_operators:", e)
         return []
 
 
 # ---------------------------------------------------------------------
-# FILTRO DE PAISES PERMITIDOS
+# CONTROL DE PAÍSES PERMITIDOS
 # ---------------------------------------------------------------------
-def ensure_country_filter(operator: dict) -> List[str]:
+def ensure_country_filter(operator: dict):
     """
-    Devuelve la lista de países permitidos para el operador.
-    Si la estructura no existe, retorna una lista vacía.
+    Devuelve una lista de países permitidos para el operador.
+    Si es admin_master → todos.
     """
     if not operator:
         return []
 
-    allowed = operator.get("allowed_countries")
-    if isinstance(allowed, list):
-        return allowed
-    return []
+    if operator.get("role") == "admin_master":
+        return ["ALL"]
+
+    allowed = operator.get("allowed_countries", [])
+    if not isinstance(allowed, list):
+        return []
+
+    return allowed
 
 
-def get_operator_allowed_countries(operator_id: str) -> List[str]:
-    op = get_operator_info(operator_id)
+def get_operator_allowed_countries(operator_id: str):
+    """
+    Devuelve los países que puede gestionar un operador.
+    """
+    op = get_operator_by_id(operator_id)
     return ensure_country_filter(op)
 
 
 # ---------------------------------------------------------------------
-# SEED GLOBAL DEL OPERADOR
+# SEMILLA GLOBAL DEL OPERADOR (para hashing determinista si aplica)
 # ---------------------------------------------------------------------
-def get_operator_global_seed(operator_id: str) -> Optional[str]:
+def get_operator_global_seed(operator_id: str):
     try:
         result = (
-            supabase.table("ca_operator_seeds")
-            .select("*")
-            .eq("operator_id", operator_id)
-            .single()
+            supabase.table("ca_operators")
+            .select("global_seed")
+            .eq("id", operator_id)
             .execute()
         )
-        return result.data.get("global_seed") if result and result.data else None
-    except Exception:
+        if result and result.data:
+            return result.data[0].get("global_seed")
+        return None
+    except Exception as e:
+        print("Error get_operator_global_seed:", e)
         return None
 
 
-def update_operator_global_seed(operator_id: str, seed: str):
-    try:
-        supabase.table("ca_operator_seeds").upsert(
-            {"operator_id": operator_id, "global_seed": seed}
-        ).execute()
-        return True
-    except Exception:
-        return False
-
-
 # ---------------------------------------------------------------------
-# KYC LOGS
-# ---------------------------------------------------------------------
-def list_operator_kyc_logs(operator_id: str):
-    try:
-        result = (
-            supabase.table("ca_operator_kyc_logs")
-            .select("*")
-            .eq("operator_id", operator_id)
-            .order("created_at", desc=True)
-            .execute()
-        )
-        return result.data or []
-    except Exception:
-        return []
-
-
-# ---------------------------------------------------------------------
-# UPDATE OPERATOR INFO
+# ACTUALIZAR OPERADOR
 # ---------------------------------------------------------------------
 def update_operator(operator_id: str, data: dict):
     try:
-        supabase.table("ca_operators").update(data).eq("id", operator_id).execute()
-        return True
-    except Exception:
-        return False
+        clean = data.copy()
+
+        # Si llega password → hashear
+        if "password" in clean and clean["password"]:
+            raw = clean["password"].encode("utf-8")
+            hashed = bcrypt.hashpw(raw, bcrypt.gensalt()).decode("utf-8")
+            clean["password_hash"] = hashed
+            del clean["password"]
+
+        result = (
+            supabase.table("ca_operators")
+            .update(clean)
+            .eq("id", operator_id)
+            .execute()
+        )
+
+        return result.data[0] if result and result.data else None
+    except Exception as e:
+        print("Error update_operator:", e)
+        return None
 
 
 # ---------------------------------------------------------------------
-# CREAR OPERADOR NUEVO
+# CREAR OPERADOR (usado por Admin Operators KYC)
 # ---------------------------------------------------------------------
 def create_operator(data: dict):
-    """
-    Crea un nuevo operador en ca_operators.
-    Si trae password en texto plano, se hashea automáticamente.
-    """
     try:
         new_data = data.copy()
 
-        # Hash automático si viene un password normal
+        # Hash automático del password
         if "password" in new_data and new_data["password"]:
             raw = new_data["password"].encode("utf-8")
             hashed = bcrypt.hashpw(raw, bcrypt.gensalt()).decode("utf-8")
