@@ -1,91 +1,109 @@
-# backend_core/services/adjudicator_engine.py
-
 import hashlib
-from datetime import datetime
+import datetime
 from backend_core.services.supabase_client import table
-from backend_core.services.audit_repository import log_event
 from backend_core.services.session_repository import (
-    get_session_by_id,
-    mark_session_finished,
     get_participants_sorted,
+    finish_session,
 )
-from backend_core.services.operator_repository import get_operator_global_seed
+from backend_core.services.audit_repository import log_event
 
 
-# ==========================================================================
-# FUNCIONES INTERNAS
-# ==========================================================================
-def _build_input_string(session, num_participants: int, previous_hash: str):
-    return (
-        f"{session['id']}:"
-        f"{session.get('module_id','')}:"
-        f"{session['created_at']}:"
-        f"{num_participants}:"
-        f"{session.get('global_seed','')}:"
-        f"{previous_hash}"
-    )
+# =====================================================
+# 🔹 Obtener semilla usada por una sesión (legacy)
+# =====================================================
+
+def get_seed_for_session(session_id: str):
+    """
+    Devuelve la semilla asociada a una sesión.
+    Si no existe campo seed, genera una basada en created_at.
+    """
+    try:
+        result = (
+            table("ca_sessions")
+            .select("seed, created_at")
+            .eq("id", session_id)
+            .maybe_single()
+            .execute()
+        )
+        seed = result.get("seed")
+        if seed:
+            return seed
+
+        # Semilla legacy: hash SHA256 de created_at
+        created = result.get("created_at", "")
+        return hashlib.sha256(created.encode()).hexdigest()
+
+    except Exception:
+        return None
 
 
-def _calculate_hash(input_string: str):
-    return hashlib.sha256(input_string.encode()).hexdigest()
+# =====================================================
+# 🔹 Estado del motor determinista (para Engine Monitor)
+# =====================================================
+
+def get_engine_state():
+    """
+    Devuelve un snapshot del estado del motor.
+    usado por Engine Monitor.
+    """
+    now = datetime.datetime.utcnow().isoformat()
+    return {
+        "engine": "deterministic_adjudicator",
+        "version": "1.0",
+        "status": "online",
+        "timestamp": now,
+    }
 
 
-# ==========================================================================
-# API PRINCIPAL — USADA POR Active Sessions y Workers
-# ==========================================================================
+# =====================================================
+# 🔹 Motor determinista principal (versión estable)
+# =====================================================
+
 def run_adjudication(session_id: str):
     """
-    Motor determinista:
-    - carga sesión
-    - carga participantes ordenados
-    - genera semilla
-    - calcula índice ganador
-    - registra auditoría
-    - marca sesión como terminada
+    Ejecuta la adjudicación determinista.
+    Selección = hash(seed + participant_index) más bajo.
     """
-    session = get_session_by_id(session_id)
-    if not session:
-        raise Exception(f"Session {session_id} not found")
 
+    # 1. Participantes ordenados por created_at
     participants = get_participants_sorted(session_id)
-    num = len(participants)
-    if num == 0:
-        raise Exception("No participants found")
+    if not participants:
+        raise Exception("No hay participantes en la sesión.")
 
-    previous_hash = session.get("previous_chain_hash") or ""
+    # 2. Semilla
+    seed = get_seed_for_session(session_id)
+    if not seed:
+        raise Exception("No fue posible obtener la seed.")
 
-    input_string = _build_input_string(session, num, previous_hash)
-    seed = _calculate_hash(input_string)
+    scores = []
+    for idx, p in enumerate(participants):
+        base = f"{seed}:{idx}:{p['id']}"
+        digest = hashlib.sha256(base.encode()).hexdigest()
+        scores.append((digest, p))
 
-    winner_index = int(seed, 16) % num
-    winner = participants[winner_index]
+    # 3. Ganador: menor hash lexicográfico
+    scores.sort(key=lambda x: x[0])
+    winner = scores[0][1]
 
-    # ============================================================
-    # Registrar auditoría
-    # ============================================================
+    # 4. Marcar ganador en ca_participants
+    table("ca_participants")\
+        .update({"is_awarded": True})\
+        .eq("id", winner["id"])\
+        .execute()
+
+    # 5. Marcar sesión como finalizada
+    finish_session(session_id)
+
+    # 6. Log en auditoría
     log_event(
-        event_type="session_adjudicated",
-        details={
-            "session_id": session_id,
-            "input_string": input_string,
-            "hash_output": seed,
-            "winner_participant_id": winner["id"],
-            "timestamp": datetime.utcnow().isoformat(),
-        },
+        "session_adjudicated",
+        session_id=session_id,
+        winner_id=winner["id"],
+        seed=seed
     )
-
-    # ============================================================
-    # Actualizar participante ganador
-    # ============================================================
-    table("session_participants").update({"is_awarded": True}).eq("id", winner["id"]).execute()
-
-    # ============================================================
-    # Cambiar estado de sesión
-    # ============================================================
-    mark_session_finished(session_id)
 
     return {
         "winner_participant_id": winner["id"],
-        "hash": seed,
-        "input": input_string,
+        "seed": seed,
+        "participants_total": len(participants)
     }
