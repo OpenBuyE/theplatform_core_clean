@@ -2,17 +2,44 @@ import streamlit as st
 import bcrypt
 from backend_core.services.supabase_client import table
 
-# ---------------------------------------------------------
-# Operator Login — Email + Password + Control de Roles/Paises
-# ---------------------------------------------------------
+# ====================================================
+#  Helper para normalizar respuestas de Supabase
+# ====================================================
+
+def _extract_data(result):
+    """
+    Normaliza la respuesta de Supabase.
+    Devuelve siempre una LISTA de diccionarios.
+    """
+    if result is None:
+        return []
+
+    # Caso 1: supabase-py devuelve {"data": [...], ...}
+    if isinstance(result, dict) and "data" in result:
+        return result.get("data") or []
+
+    # Caso 2: SDK devuelve resultados directamente como lista
+    if isinstance(result, list):
+        return result
+
+    # Caso 3: objeto con atributo .data (algunos SDK)
+    if hasattr(result, "data"):
+        return result.data or []
+
+    # Caso extremo: desconocido → devolver vacío
+    return []
+
+
+# ====================================================
+#  Lógica de autenticación
+# ====================================================
 
 def authenticate_operator(email: str, password: str):
     """
-    Autentica a un operador contra la tabla ca_operators.
-    Devuelve datos completos del operador si la contraseña coincide.
+    Autentica al operador según ca_operators.
     """
     try:
-        result = (
+        raw = (
             table("ca_operators")
             .select("*")
             .eq("email", email)
@@ -23,29 +50,34 @@ def authenticate_operator(email: str, password: str):
         st.error(f"Error conectando con la base de datos: {e}")
         return None
 
-    if not result or len(result) == 0:
+    operators = _extract_data(raw)
+
+    if not operators:
         return None
 
-    operator = result[0]
+    operator = operators[0]
 
-    stored_hash = operator.get("password_hash", "")
+    stored_hash = operator.get("password_hash")
     if not stored_hash:
         return None
 
-    # Validar contraseña usando bcrypt
-    if bcrypt.checkpw(password.encode(), stored_hash.encode()):
-        return operator
+    try:
+        valid = bcrypt.checkpw(password.encode(), stored_hash.encode())
+    except Exception:
+        return None
 
-    return None
+    return operator if valid else None
 
+
+# ====================================================
+#  UI — Login
+# ====================================================
 
 def render_operator_login():
     st.title("🔐 Operator Login")
 
     st.markdown("### Acceso al Panel Administrativo")
-    st.markdown("Use sus credenciales para acceder al sistema.")
 
-    # Campos del formulario
     email = st.text_input("Usuario / Email")
     password = st.text_input("Contraseña", type="password")
 
@@ -53,7 +85,7 @@ def render_operator_login():
         operator = authenticate_operator(email, password)
 
         if operator:
-            # Éxito — cargar credenciales en la sesión
+            # Guardar en sesión
             st.session_state["operator_id"] = operator["id"]
             st.session_state["email"] = operator["email"]
             st.session_state["full_name"] = operator.get("full_name", "")
@@ -62,7 +94,7 @@ def render_operator_login():
             st.session_state["global_access"] = operator.get("global_access", False)
             st.session_state["organization_id"] = operator.get("organization_id")
 
-            st.success("Autenticación correcta. Accediendo al panel...")
+            st.success("Autenticación correcta. Accediendo…")
             st.experimental_rerun()
 
         else:
