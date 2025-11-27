@@ -1,6 +1,6 @@
 """
 Operator Repository — Gestión completa de operadores
-Compatible con el panel profesional v3.
+Versión Final y 100% compatible con el panel profesional.
 """
 
 import bcrypt
@@ -36,6 +36,16 @@ def get_operator_by_id(operator_id: str):
 
 
 # ---------------------------------------------------------------------
+# INFO COMPLETA DEL OPERADOR (solicitado por el panel)
+# ---------------------------------------------------------------------
+def get_operator_info(operator_id: str):
+    """
+    Devuelve todos los campos del operador, usado en Dashboard.
+    """
+    return get_operator_by_id(operator_id)
+
+
+# ---------------------------------------------------------------------
 # LISTAR OPERADORES
 # ---------------------------------------------------------------------
 def list_operators():
@@ -48,13 +58,31 @@ def list_operators():
 
 
 # ---------------------------------------------------------------------
+# LISTAR KYC LOGS (solicitado por Admin Operators KYC)
+# ---------------------------------------------------------------------
+def list_operator_kyc_logs(operator_id: str):
+    """
+    Devuelve logs de validaciones KYC del operador.
+    La tabla se llama ca_operator_kyc_logs (crear en supabase si no existe).
+    """
+    try:
+        result = (
+            supabase.table("ca_operator_kyc_logs")
+            .select("*")
+            .eq("operator_id", operator_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return result.data if result and result.data else []
+    except Exception as e:
+        print("Error list_operator_kyc_logs:", e)
+        return []
+
+
+# ---------------------------------------------------------------------
 # CONTROL DE PAÍSES PERMITIDOS
 # ---------------------------------------------------------------------
 def ensure_country_filter(operator: dict):
-    """
-    Devuelve una lista de países permitidos para el operador.
-    Si es admin_master → todos.
-    """
     if not operator:
         return []
 
@@ -69,15 +97,12 @@ def ensure_country_filter(operator: dict):
 
 
 def get_operator_allowed_countries(operator_id: str):
-    """
-    Devuelve los países que puede gestionar un operador.
-    """
     op = get_operator_by_id(operator_id)
     return ensure_country_filter(op)
 
 
 # ---------------------------------------------------------------------
-# SEMILLA GLOBAL DEL OPERADOR (para hashing determinista si aplica)
+# SEMILLA GLOBAL (opcional para motor determinista)
 # ---------------------------------------------------------------------
 def get_operator_global_seed(operator_id: str):
     try:
@@ -102,7 +127,6 @@ def update_operator(operator_id: str, data: dict):
     try:
         clean = data.copy()
 
-        # Si llega password → hashear
         if "password" in clean and clean["password"]:
             raw = clean["password"].encode("utf-8")
             hashed = bcrypt.hashpw(raw, bcrypt.gensalt()).decode("utf-8")
@@ -123,20 +147,18 @@ def update_operator(operator_id: str, data: dict):
 
 
 # ---------------------------------------------------------------------
-# CREAR OPERADOR (usado por Admin Operators KYC)
+# CREAR OPERADOR
 # ---------------------------------------------------------------------
 def create_operator(data: dict):
     try:
         new_data = data.copy()
 
-        # Hash automático del password
         if "password" in new_data and new_data["password"]:
             raw = new_data["password"].encode("utf-8")
             hashed = bcrypt.hashpw(raw, bcrypt.gensalt()).decode("utf-8")
             new_data["password_hash"] = hashed
             del new_data["password"]
 
-        # Valores por defecto
         if "active" not in new_data:
             new_data["active"] = True
 
