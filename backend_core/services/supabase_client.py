@@ -1,17 +1,29 @@
 import os
-from supabase import create_client, Client
+from dotenv import load_dotenv
+from supabase import Client, create_client
+
+# ============================================================
+# CARGA DE VARIABLES DE ENTORNO
+# ============================================================
+load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 
-def get_supabase() -> Client:
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        raise RuntimeError("❌ ERROR: SUPABASE_URL o SUPABASE_KEY no configurados.")
+if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+    raise RuntimeError("❌ ERROR: No están definidas SUPABASE_URL o SUPABASE_SERVICE_KEY.")
 
-    client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    return client
+# ============================================================
+# CLIENTE SUPABASE — OFICIAL Y COMPATIBLE
+# ============================================================
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
-supabase = get_supabase()
-
+# ============================================================
+# ACCESO RÁPIDO A TABLAS
+# ============================================================
 def table(name: str):
+    """
+    Retorna la tabla de supabase lista para usar:
+       table("ca_operators").select("*").execute()
+    """
     return supabase.table(name)
