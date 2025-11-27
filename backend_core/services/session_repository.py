@@ -19,7 +19,8 @@ def create_parked_session(product_id: str, capacity: int):
         "pax_registered": 0,
         "created_at": datetime.utcnow().isoformat(),
     }
-    return create_session(data)[0]["id"]
+    result = create_session(data)
+    return result[0]["id"] if result else None
 
 
 # ======================================================================
@@ -46,7 +47,6 @@ def get_active_sessions():
     )
 
 
-# 📌 LISTA COMPLETA — usado por Operator Dashboard Pro
 def get_sessions():
     return (
         table("sessions")
@@ -67,7 +67,7 @@ def get_session_by_id(session_id: str):
 
 
 # ======================================================================
-# 📌 FINALIZAR / ACTIVAR SESIÓN
+# 📌 ACTIVAR / FINALIZAR SESIÓN
 # ======================================================================
 
 def activate_session(session_id: str):
@@ -96,7 +96,7 @@ def finish_session(session_id: str, winner_participant_id: str = None):
 
 
 # ======================================================================
-# 📌 PARTICIPANTES — requerido por Active Sessions
+# 📌 PARTICIPANTES
 # ======================================================================
 
 def get_participants_for_session(session_id: str):
@@ -104,13 +104,13 @@ def get_participants_for_session(session_id: str):
         table("participants")
         .select("*")
         .eq("session_id", session_id)
-        .order("created_at", desc=False)
+        .order("created_at", asc=True)
         .execute()
     )
 
 
 # ======================================================================
-# 📌 SERIES — usado en Session Chains
+# 📌 SERIES
 # ======================================================================
 
 def get_session_series(series_id: str):
@@ -134,7 +134,7 @@ def get_sessions_by_series(series_id: str):
 
 
 # ======================================================================
-# 📌 EXPIRADAS / HISTÓRICO
+# 📌 HISTÓRICO / EXPIRADAS
 # ======================================================================
 
 def get_expired_sessions():
@@ -159,7 +159,7 @@ def get_finished_sessions():
 
 
 # ======================================================================
-# 📌 LISTA GENERAL — Engine Monitor
+# 📌 LISTA COMPLETA (Engine Monitor)
 # ======================================================================
 
 def get_all_sessions():
@@ -172,11 +172,11 @@ def get_all_sessions():
 
 
 # ======================================================================
-# 📌 COMPATIBILIDAD — VISTAS ANTIGUAS
+# 📌 COMPATIBILIDAD LEGACY (muy importante)
 # ======================================================================
 
 def mark_session_finished(session_id: str, winner_participant_id: str = None):
     """
-    Alias de compatibilidad para vistas anteriores.
+    Alias retrocompatible para vistas antiguas.
     """
     return finish_session(session_id, winner_participant_id)
