@@ -169,3 +169,14 @@ def get_all_sessions():
         .order("created_at", desc=True)
         .execute()
     )
+
+
+# ======================================================================
+# 📌 COMPATIBILIDAD — VISTAS ANTIGUAS
+# ======================================================================
+
+def mark_session_finished(session_id: str, winner_participant_id: str = None):
+    """
+    Alias de compatibilidad para vistas anteriores.
+    """
+    return finish_session(session_id, winner_participant_id)
