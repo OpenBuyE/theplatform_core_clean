@@ -6,150 +6,235 @@ from backend_core.services.operator_repository import ensure_country_filter
 
 
 # ============================================================
-# SESIONES — HELPERS BASE
+# CREAR SESIÓN PARKED
 # ============================================================
 
-def get_session_by_id(session_id: str):
-    return table("ca_sessions").select("*").eq("id", session_id).single().execute()
-
-
-# ============================================================
-# CREACIÓN, ACTIVACIÓN, FINALIZACIÓN
-# ============================================================
-
-def create_session(product_id: str, capacity: int, country: str):
-    now = datetime.utcnow().isoformat()
-
-    session = {
+def create_session(product_id, capacity, country, module_id=None):
+    rec = {
         "product_id": product_id,
         "capacity": capacity,
         "pax_registered": 0,
         "status": "parked",
-        "created_at": now,
-        "expires_at": (datetime.utcnow() + timedelta(days=5)).isoformat(),
         "country": country,
+        "module_id": module_id,
+        "created_at": datetime.utcnow().isoformat(),
     }
-
-    result = table("ca_sessions").insert(session).execute()
+    result = table("ca_sessions").insert(rec).execute()
     return result[0]["id"]
 
 
-def activate_session(session_id: str):
-    table("ca_sessions").update({"status": "active"}).eq("id", session_id).execute()
-
-
-def finish_session(session_id: str):
-    """Usado por Active Sessions."""
-    table("ca_sessions").update({"status": "finished"}).eq("id", session_id).execute()
-
-
-def mark_session_finished(session_id: str):
-    """Usado por adjudicator_engine."""
-    table("ca_sessions").update({"status": "finished"}).eq("id", session_id).execute()
+# Alias legacy para compatibilidad
+create_parked_session = create_session
 
 
 # ============================================================
-# SELECTORES — LISTADOS DE SESIONES
+# LISTAR SESIONES PARKED
 # ============================================================
-
-def get_sessions(operator=None):
-    """Usado por Operator Dashboard Pro."""
-    if operator:
-        flt = ensure_country_filter(operator)
-        return table("ca_sessions").select("*").filter(*flt).order("created_at", desc=True).execute()
-    return table("ca_sessions").select("*").order("created_at", desc=True).execute()
-
-
-def get_all_sessions():
-    """Usado por Engine Monitor."""
-    return table("ca_sessions").select("*").order("created_at", desc=True).execute()
-
 
 def get_parked_sessions(operator=None):
     if operator:
-        flt = ensure_country_filter(operator)
-        return table("ca_sessions").select("*").eq("status", "parked").filter(*flt).execute()
-    return table("ca_sessions").select("*").eq("status", "parked").execute()
+        field, countries = ensure_country_filter(operator)
+        return (
+            table("ca_sessions")
+            .select("*")
+            .eq("status", "parked")
+            .in_(field, countries)
+            .order("created_at", desc=True)
+            .execute()
+        )
 
-
-def get_active_sessions(operator=None):
-    if operator:
-        flt = ensure_country_filter(operator)
-        return table("ca_sessions").select("*").eq("status", "active").filter(*flt).execute()
-    return table("ca_sessions").select("*").eq("status", "active").execute()
-
-
-def get_finished_sessions(operator=None):
-    if operator:
-        flt = ensure_country_filter(operator)
-        return table("ca_sessions").select("*").eq("status", "finished").filter(*flt).execute()
-    return table("ca_sessions").select("*").eq("status", "finished").execute()
-
-
-def get_expired_sessions():
-    now = datetime.utcnow().isoformat()
-    return table("ca_sessions").select("*").eq("status", "parked").lt("expires_at", now).execute()
-
-
-# ============================================================
-# PARTICIPANTES (ordenados determinísticamente)
-# ============================================================
-
-def get_participants_sorted(session_id: str):
-    return (
-        table("session_participants")
-        .select("*")
-        .eq("session_id", session_id)
-        .order("user_id", asc=True)
-        .execute()
-    )
-
-
-# ============================================================
-# SERIES DE SESIONES
-# ============================================================
-
-def get_session_series():
-    """Usado por Admin Series."""
-    return table("ca_session_series").select("*").order("created_at").execute()
-
-
-def list_session_series():
-    """Llamado por algunas vistas antiguas."""
-    return table("ca_session_series").select("*").order("created_at").execute()
-
-
-def get_sessions_by_series(series_id: str):
     return (
         table("ca_sessions")
         .select("*")
-        .eq("series_id", series_id)
-        .order("created_at")
+        .eq("status", "parked")
+        .order("created_at", desc=True)
         .execute()
     )
 
 
-def get_next_session_in_series(series_id: str):
-    sessions = get_sessions_by_series(series_id)
-    if not sessions:
-        return None
-    return sessions[-1]
+# ============================================================
+# ACTIVAR SESIÓN
+# ============================================================
+
+def activate_session(session_id):
+    return (
+        table("ca_sessions")
+        .update({
+            "status": "active",
+            "activated_at": datetime.utcnow().isoformat()
+        })
+        .eq("id", session_id)
+        .execute()
+    )
 
 
 # ============================================================
-# ROLLING — CREAR SIGUIENTE SESIÓN
+# SESIONES ACTIVAS
 # ============================================================
 
-def create_next_session(old_session):
-    new_session = {
-        "product_id": old_session["product_id"],
-        "capacity": old_session["capacity"],
-        "pax_registered": 0,
-        "status": "parked",
-        "created_at": datetime.utcnow().isoformat(),
-        "expires_at": (datetime.utcnow() + timedelta(days=5)).isoformat(),
-        "series_id": old_session.get("series_id"),
-        "country": old_session["country"],
-    }
-    result = table("ca_sessions").insert(new_session).execute()
-    return result[0]["id"]
+def get_active_sessions(operator=None):
+    if operator:
+        field, countries = ensure_country_filter(operator)
+        return (
+            table("ca_sessions")
+            .select("*")
+            .eq("status", "active")
+            .in_(field, countries)
+            .order("activated_at", desc=True)
+            .execute()
+        )
+
+    return (
+        table("ca_sessions")
+        .select("*")
+        .eq("status", "active")
+        .order("activated_at", desc=True)
+        .execute()
+    )
+
+
+# ============================================================
+# LISTAR PARTICIPANTES DE UNA SESIÓN
+# ============================================================
+
+def get_participants_for_session(session_id):
+    return (
+        table("ca_participants")
+        .select("*")
+        .eq("session_id", session_id)
+        .order("created_at", asc=True)
+        .execute()
+    )
+
+
+# ============================================================
+# CADENAS / SERIES
+# ============================================================
+
+def get_session_series(session_id, operator=None):
+    session = (
+        table("ca_sessions")
+        .select("*")
+        .eq("id", session_id)
+        .single()
+        .execute()
+    )
+
+    if not session or not session.get("series"):
+        return []
+
+    series = session["series"]
+
+    if operator:
+        field, countries = ensure_country_filter(operator)
+        return (
+            table("ca_sessions")
+            .select("*")
+            .eq("series", series)
+            .in_(field, countries)
+            .order("created_at", desc=True)
+            .execute()
+        )
+
+    return (
+        table("ca_sessions")
+        .select("*")
+        .eq("series", series)
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+
+# ============================================================
+# SESIONES FINALIZADAS
+# ============================================================
+
+def get_finished_sessions(operator=None):
+    if operator:
+        field, countries = ensure_country_filter(operator)
+        return (
+            table("ca_sessions")
+            .select("*")
+            .eq("status", "finished")
+            .in_(field, countries)
+            .order("finished_at", desc=True)
+            .execute()
+        )
+
+    return (
+        table("ca_sessions")
+        .select("*")
+        .eq("status", "finished")
+        .order("finished_at", desc=True)
+        .execute()
+    )
+
+
+# ============================================================
+# EXPIRADAS (más de 5 días)
+# ============================================================
+
+def get_expired_sessions():
+    cutoff = (datetime.utcnow() - timedelta(days=5)).isoformat()
+
+    return (
+        table("ca_sessions")
+        .select("*")
+        .eq("status", "active")
+        .lt("activated_at", cutoff)
+        .execute()
+    )
+
+
+# ============================================================
+# FINALIZAR SESIÓN
+# ============================================================
+
+def finish_session(session_id, winner_participant_id=None):
+    return (
+        table("ca_sessions")
+        .update({
+            "status": "finished",
+            "winner_participant_id": winner_participant_id,
+            "finished_at": datetime.utcnow().isoformat(),
+        })
+        .eq("id", session_id)
+        .execute()
+    )
+
+
+# ============================================================
+# SESIONES (GENÉRICO)
+# ============================================================
+
+def get_sessions(operator=None):
+    if operator:
+        field, countries = ensure_country_filter(operator)
+        return (
+            table("ca_sessions")
+            .select("*")
+            .in_(field, countries)
+            .order("created_at", desc=True)
+            .execute()
+        )
+
+    return (
+        table("ca_sessions")
+        .select("*")
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+
+# ============================================================
+# OBTENER SESIÓN POR ID
+# ============================================================
+
+def get_session_by_id(session_id):
+    return (
+        table("ca_sessions")
+        .select("*")
+        .eq("id", session_id)
+        .single()
+        .execute()
+    )
