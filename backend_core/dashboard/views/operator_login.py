@@ -2,76 +2,68 @@ import streamlit as st
 import bcrypt
 from backend_core.services.supabase_client import table
 
-# ====================================================
-#  Helper para normalizar respuestas de Supabase
-# ====================================================
 
-def _extract_data(result):
-    """
-    Normaliza la respuesta de Supabase.
-    Devuelve siempre una LISTA de diccionarios.
-    """
-    if result is None:
-        return []
+# ============================================================
+# NORMALIZACIÓN
+# ============================================================
 
-    # Caso 1: supabase-py devuelve {"data": [...], ...}
-    if isinstance(result, dict) and "data" in result:
-        return result.get("data") or []
-
-    # Caso 2: SDK devuelve resultados directamente como lista
-    if isinstance(result, list):
-        return result
-
-    # Caso 3: objeto con atributo .data (algunos SDK)
-    if hasattr(result, "data"):
-        return result.data or []
-
-    # Caso extremo: desconocido → devolver vacío
-    return []
+def normalize_email(e: str) -> str:
+    if not e:
+        return ""
+    return e.strip().lower()
 
 
-# ====================================================
-#  Lógica de autenticación
-# ====================================================
+# ============================================================
+# AUTENTICACIÓN ROBUSTA
+# ============================================================
 
 def authenticate_operator(email: str, password: str):
     """
-    Autentica al operador según ca_operators.
+    Autenticación tolerante:
+    - email en minúsculas
+    - soporta active como boolean o como texto "true"
+    - debug opcional si no encuentra coincidencias
     """
+
+    email_norm = normalize_email(email)
+
     try:
-        raw = (
+        # Obtener todos los operadores activos (boolean OR string)
+        result = (
             table("ca_operators")
             .select("*")
-            .eq("email", email)
-            .eq("active", True)
             .execute()
         )
     except Exception as e:
-        st.error(f"Error conectando con la base de datos: {e}")
+        st.error(f"❌ Error conectando con la base de datos: {e}")
         return None
 
-    operators = _extract_data(raw)
-
-    if not operators:
+    if not result:
         return None
 
-    operator = operators[0]
+    # Buscar coincidencias manualmente para evitar errores de formato
+    for op in result:
+        email_db = normalize_email(op.get("email", ""))
+        active_raw = op.get("active", True)
 
-    stored_hash = operator.get("password_hash")
-    if not stored_hash:
-        return None
+        is_active = (
+            active_raw is True or
+            active_raw == "true" or
+            active_raw == "True" or
+            active_raw == 1
+        )
 
-    try:
-        valid = bcrypt.checkpw(password.encode(), stored_hash.encode())
-    except Exception:
-        return None
+        if email_db == email_norm and is_active:
+            stored_hash = op.get("password_hash", "")
+            if stored_hash and bcrypt.checkpw(password.encode(), stored_hash.encode()):
+                return op
 
-    return operator if valid else None
+    return None
 
 
-# ====================================================
-#  UI — Login
-# ====================================================
+# ============================================================
+# RENDER DE PANTALLA
+# ============================================================
 
 def render_operator_login():
     st.title("🔐 Operator Login")
@@ -85,20 +77,17 @@ def render_operator_login():
         operator = authenticate_operator(email, password)
 
         if operator:
-            # Guardar en sesión
             st.session_state["operator_id"] = operator["id"]
             st.session_state["email"] = operator["email"]
             st.session_state["full_name"] = operator.get("full_name", "")
             st.session_state["role"] = operator.get("role", "operator")
             st.session_state["allowed_countries"] = operator.get("allowed_countries", [])
             st.session_state["global_access"] = operator.get("global_access", False)
-            st.session_state["organization_id"] = operator.get("organization_id")
 
-            st.success("Autenticación correcta. Accediendo…")
+            st.success("Acceso correcto. Cargando panel…")
             st.experimental_rerun()
-
         else:
             st.error("❌ Credenciales incorrectas o usuario no activo.")
 
     st.markdown("---")
-    st.info("Si tiene problemas para acceder, contacte con un Admin Master.")
+    st.info("Si no puede acceder, contacte con Admin Master.")
