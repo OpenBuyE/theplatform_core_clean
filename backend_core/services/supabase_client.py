@@ -1,40 +1,21 @@
 import os
-from dotenv import load_dotenv
-from postgrest import SyncClient
-
-# ============================================================
-# CARGA DE VARIABLES DE ENTORNO
-# ============================================================
-load_dotenv()
+from supabase import create_client, Client
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
-if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-    raise RuntimeError("❌ ERROR: No están definidas SUPABASE_URL o SUPABASE_SERVICE_KEY.")
+def get_supabase() -> Client:
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        raise RuntimeError("❌ ERROR: SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY no configurados.")
 
-# Endpoint REST de Supabase
-REST_URL = f"{SUPABASE_URL}/rest/v1"
+    client: Client = create_client(
+        SUPABASE_URL,
+        SUPABASE_SERVICE_ROLE_KEY
+    )
 
-# Cliente PostgREST (sin proxys raros, sin SDK supabase)
-_client = SyncClient(
-    REST_URL,
-    headers={
-        "apikey": SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-    },
-)
+    return client
 
+supabase = get_supabase()
 
-# ============================================================
-# ACCESO RÁPIDO A TABLAS
-# ============================================================
 def table(name: str):
-    """
-    Devuelve un builder de PostgREST para la tabla indicada.
-
-    Ejemplos de uso en services:
-      table("products_v2").select("*").eq("id", product_id).single().execute()
-      table("ca_sessions").insert({...}).execute()
-    """
-    return _client.from_(name)
+    return supabase.table(name)
