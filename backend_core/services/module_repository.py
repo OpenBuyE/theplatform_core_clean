@@ -1,27 +1,55 @@
 # backend_core/services/module_repository.py
 
-from datetime import datetime
 from backend_core.services.supabase_client import table
 
 
-# ============================================================
-# LISTAR MÓDULOS
-# ============================================================
+# ======================================================
+# LISTA DE MÓDULOS DISPONIBLES
+# ======================================================
 
-def list_all_modules():
+def list_modules():
     return (
         table("ca_modules")
         .select("*")
-        .order("module_code", asc=True)
+        .order("created_at", asc=True)
         .execute()
     )
 
 
-# ============================================================
-# OBTENER MÓDULO
-# ============================================================
+# ======================================================
+# ASIGNAR MÓDULO A SESIÓN
+# ======================================================
 
-def get_module(module_id: str):
+def assign_module(session_id: str, module_id: str):
+    """
+    Asigna un módulo específico a una sesión.
+    """
+    return (
+        table("ca_sessions")
+        .update({"module_id": module_id})
+        .eq("id", session_id)
+        .execute()
+    )
+
+
+# ======================================================
+# MÓDULO DE SESIÓN
+# ======================================================
+
+def get_module_for_session(session_id: str):
+    sess = (
+        table("ca_sessions")
+        .select("module_id")
+        .eq("id", session_id)
+        .single()
+        .execute()
+    )
+
+    if not sess or not sess.get("module_id"):
+        return None
+
+    module_id = sess["module_id"]
+
     return (
         table("ca_modules")
         .select("*")
@@ -31,60 +59,19 @@ def get_module(module_id: str):
     )
 
 
-# ============================================================
-# ASIGNAR MÓDULO A SESIÓN
-# ============================================================
+# ======================================================
+# LISTAR MÓDULOS ASOCIADOS A UNA SERIE
+# ======================================================
 
-def assign_module_to_session(session_id: str, module_id: str):
-    data = {
-        "session_id": session_id,
-        "module_id": module_id,
-        "created_at": datetime.utcnow().isoformat(),
-    }
-    res = table("ca_session_modules").insert(data).execute()
-    return res[0] if res else None
-
-
-# ============================================================
-# OBTENER MÓDULO PARA SESIÓN
-# ============================================================
-
-def get_module_for_session(session_id: str):
+def list_session_modules(series_id: str):
     """
-    Devuelve el módulo asociado a una sesión.
-    """
-    link = (
-        table("ca_session_modules")
-        .select("*")
-        .eq("session_id", session_id)
-        .single()
-        .execute()
-    )
-
-    if not link:
-        return None
-
-    module = (
-        table("ca_modules")
-        .select("*")
-        .eq("id", link["module_id"])
-        .single()
-        .execute()
-    )
-    return module
-
-
-# ============================================================
-# SESSION SERIES (usado en Admin Series)
-# ============================================================
-
-def list_session_series():
-    """
-    Lista todas las series operativas de sesiones.
+    Para Admin Series.
+    Lista todos los módulos asociados a una sesión dentro de una serie.
     """
     return (
-        table("ca_session_series")
+        table("ca_session_modules")
         .select("*")
-        .order("created_at", desc=True)
+        .eq("series_id", series_id)
+        .order("created_at", asc=True)
         .execute()
     )
