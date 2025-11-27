@@ -1,165 +1,255 @@
 # backend_core/services/operator_repository.py
 
+import uuid
 from backend_core.services.supabase_client import table
 
 
 # =========================================================
 # HELPERS
 # =========================================================
-def _fetch_one(query):
+
+def _fetch_one(q):
+    """
+    Ejecuta una query y devuelve un único registro o None.
+    """
     try:
-        result = query.execute()
-        return result[0] if result else None
-    except:
+        res = q.execute()
+        if isinstance(res, list) and res:
+            return res[0]
+        elif isinstance(res, dict) and res.get("data"):
+            return res["data"][0]
+        return None
+    except Exception:
         return None
 
 
-def _fetch_many(query):
+def _fetch_many(q):
+    """
+    Ejecuta una query y devuelve lista (vacía si falla).
+    """
     try:
-        result = query.execute()
-        return result if result else []
-    except:
+        res = q.execute()
+        if isinstance(res, list):
+            return res
+        elif isinstance(res, dict) and res.get("data"):
+            return res["data"]
+        return []
+    except Exception:
         return []
 
 
 # =========================================================
-# LISTADO DE OPERADORES
+# GETTERS PRINCIPALES
 # =========================================================
-def list_operators(active_only=True, country=None):
-    q = table("ca_operators").select("*")
 
-    if active_only:
-        q = q.eq("active", True)
-
-    if country:
-        q = q.eq("country", country)
-
-    return _fetch_many(q)
-
-
-# =========================================================
-# INFO DE OPERADOR
-# =========================================================
 def get_operator(operator_id: str):
     q = (
         table("ca_operators")
         .select("*")
         .eq("id", operator_id)
-        .single()
+        .limit(1)
     )
     return _fetch_one(q)
 
 
-def get_operator_info(operator_id: str):
-    return get_operator(operator_id)
+def get_operator_by_email(email: str):
+    q = (
+        table("ca_operators")
+        .select("*")
+        .eq("email", email)
+        .limit(1)
+    )
+    return _fetch_one(q)
+
+
+def list_operators():
+    q = table("ca_operators").select("*").order("created_at", desc=True)
+    return _fetch_many(q)
 
 
 # =========================================================
-# CAMPOS REQUERIDOS POR VARIAS VISTAS
+# ROLES Y PAÍSES
 # =========================================================
+
 def get_operator_allowed_countries(operator_id: str):
     op = get_operator(operator_id)
     if not op:
         return []
-    return op.get("allowed_countries", [])
+    return op.get("allowed_countries", []) or []
 
 
-def get_operator_role(operator_id: str):
+def ensure_country_filter(operator_id: str, country: str):
+    """
+    Devuelve el país si el operador tiene permiso.
+    Devuelve None si NO tiene permiso.
+    """
     op = get_operator(operator_id)
     if not op:
         return None
-    return op.get("role")
+
+    allowed = op.get("allowed_countries", []) or []
+
+    # Admin global puede entrar a todo
+    if op.get("global_access", False):
+        return country
+
+    if country in allowed:
+        return country
+
+    return None
 
 
-def get_operator_country(operator_id: str):
+def get_operator_info(operator_id: str):
+    """
+    Información básica, solicitado desde Operator Dashboard.
+    """
     op = get_operator(operator_id)
     if not op:
         return None
-    return op.get("country")
+
+    return {
+        "id": op["id"],
+        "email": op.get("email"),
+        "full_name": op.get("full_name"),
+        "role": op.get("role", "operator"),
+        "allowed_countries": op.get("allowed_countries", []),
+        "global_access": op.get("global_access", False),
+        "organization_id": op.get("organization_id"),
+        "active": op.get("active", True),
+    }
 
 
 # =========================================================
-# CREAR OPERADOR
+# CRUD COMPLETO
 # =========================================================
+
 def create_operator(
     email: str,
+    password_hash: str,
     full_name: str,
     role: str,
-    password_hash: str,
     allowed_countries: list,
+    global_access: bool,
     organization_id: str,
-    active: bool = True,
-    global_access: bool = False,
+    active: bool = True
 ):
+    new_id = str(uuid.uuid4())
+
     data = {
+        "id": new_id,
         "email": email,
+        "password_hash": password_hash,
         "full_name": full_name,
         "role": role,
-        "password_hash": password_hash,
         "allowed_countries": allowed_countries,
+        "global_access": global_access,
         "organization_id": organization_id,
         "active": active,
-        "global_access": global_access,
     }
 
     q = table("ca_operators").insert(data)
     try:
-        res = q.execute()
-        return res[0] if res else None
+        q.execute()
+        return new_id
     except Exception:
         return None
 
 
-# =========================================================
-# ACTUALIZAR OPERADOR
-# =========================================================
 def update_operator(operator_id: str, data: dict):
+    if not data:
+        return False
+
     q = (
         table("ca_operators")
         .update(data)
         .eq("id", operator_id)
     )
     try:
-        res = q.execute()
-        return res[0] if res else None
+        q.execute()
+        return True
     except Exception:
-        return None
+        return False
+
+
+def delete_operator(operator_id: str):
+    q = table("ca_operators").delete().eq("id", operator_id)
+    try:
+        q.execute()
+        return True
+    except Exception:
+        return False
 
 
 # =========================================================
-# DESACTIVAR OPERADOR
+# OPERADORES + KYC LOGS
 # =========================================================
-def disable_operator(operator_id: str):
-    return update_operator(operator_id, {"active": False})
 
-
-# =========================================================
-# FILTROS
-# =========================================================
-def list_operators_by_role(role: str):
-    q = table("ca_operators").select("*").eq("role", role)
-    return _fetch_many(q)
-
-
-def list_operators_by_country(country: str):
-    q = table("ca_operators").select("*").eq("country", country)
-    return _fetch_many(q)
-
-
-def search_operators(text: str):
+def list_operator_kyc_logs(operator_id: str):
     q = (
-        table("ca_operators")
+        table("ca_operator_kyc")
         .select("*")
-        .ilike("full_name", f"%{text}%")
+        .eq("operator_id", operator_id)
+        .order("created_at", desc=True)
     )
     return _fetch_many(q)
 
 
 # =========================================================
-# KYC LOGS (placeholder)
+# AUTH HELPERS
 # =========================================================
-def list_operator_kyc_logs(operator_id: str):
+
+def validate_email_exists(email: str):
+    return True if get_operator_by_email(email) else False
+
+
+def authenticate(email: str, password_hash: str):
     """
-    Placeholder — evita errores mientras se crea el módulo real.
+    Devuelve operador si coincide email + password_hash (ya validado en login.py)
     """
-    return []
+    op = get_operator_by_email(email)
+    if not op:
+        return None
+
+    if op.get("password_hash") == password_hash:
+        return op
+
+    return None
+
+
+# =========================================================
+# LISTA PARA ADMIN MANAGER PRO
+# =========================================================
+
+def list_operators_minimal():
+    """
+    Versión ligera para listas en Operator Manager Pro.
+    """
+    q = (
+        table("ca_operators")
+        .select("id,email,full_name,role,active")
+        .order("created_at", desc=True)
+    )
+    return _fetch_many(q)
+
+
+# =========================================================
+# TOOLS PARA DASHBOARD Y VISTAS
+# =========================================================
+
+def get_operator_role(operator_id):
+    op = get_operator(operator_id)
+    if not op:
+        return None
+    return op.get("role", "operator")
+
+
+def operator_is_admin(operator_id):
+    role = get_operator_role(operator_id)
+    return role in ["admin_master", "god"]
+
+
+def operator_is_global(operator_id):
+    op = get_operator(operator_id)
+    if not op:
+        return False
+    return bool(op.get("global_access", False))
