@@ -4,10 +4,12 @@ from backend_core.services.supabase_client import table
 from datetime import datetime, timedelta
 
 # ======================================================================
-# 📌 CREAR SESIÓN PARKED
+# 📌 CREAR SESIÓN
 # ======================================================================
+
 def create_session(data: dict):
     return table("sessions").insert(data).execute()
+
 
 def create_parked_session(product_id: str, capacity: int):
     data = {
@@ -15,12 +17,13 @@ def create_parked_session(product_id: str, capacity: int):
         "product_id": product_id,
         "capacity": capacity,
         "pax_registered": 0,
+        "created_at": datetime.utcnow().isoformat(),
     }
     return create_session(data)[0]["id"]
 
 
 # ======================================================================
-# 📌 SESIONES ACTIVAS / PARKED / HISTORY
+# 📌 SESIONES PARKED / ACTIVE
 # ======================================================================
 
 def get_parked_sessions():
@@ -32,6 +35,7 @@ def get_parked_sessions():
         .execute()
     )
 
+
 def get_active_sessions():
     return (
         table("sessions")
@@ -40,6 +44,17 @@ def get_active_sessions():
         .order("activated_at", desc=True)
         .execute()
     )
+
+
+# 📌 LISTA COMPLETA — usado por Operator Dashboard Pro
+def get_sessions():
+    return (
+        table("sessions")
+        .select("*")
+        .order("created_at", desc=True)
+        .execute()
+    )
+
 
 def get_session_by_id(session_id: str):
     return (
@@ -52,7 +67,7 @@ def get_session_by_id(session_id: str):
 
 
 # ======================================================================
-# 📌 ACTIVAR SESIÓN
+# 📌 FINALIZAR / ACTIVAR SESIÓN
 # ======================================================================
 
 def activate_session(session_id: str):
@@ -60,24 +75,20 @@ def activate_session(session_id: str):
         table("sessions")
         .update({
             "status": "active",
-            "activated_at": datetime.utcnow().isoformat()
+            "activated_at": datetime.utcnow().isoformat(),
         })
         .eq("id", session_id)
         .execute()
     )
 
-
-# ======================================================================
-# 📌 FINALIZAR SESIÓN
-# ======================================================================
 
 def finish_session(session_id: str, winner_participant_id: str = None):
     return (
         table("sessions")
         .update({
             "status": "finished",
-            "finished_at": datetime.utcnow().isoformat(),
             "winner_participant_id": winner_participant_id,
+            "finished_at": datetime.utcnow().isoformat(),
         })
         .eq("id", session_id)
         .execute()
@@ -85,7 +96,21 @@ def finish_session(session_id: str, winner_participant_id: str = None):
 
 
 # ======================================================================
-# 📌 SESSION CHAINS
+# 📌 PARTICIPANTES — requerido por Active Sessions
+# ======================================================================
+
+def get_participants_for_session(session_id: str):
+    return (
+        table("participants")
+        .select("*")
+        .eq("session_id", session_id)
+        .order("created_at", desc=False)
+        .execute()
+    )
+
+
+# ======================================================================
+# 📌 SERIES — usado en Session Chains
 # ======================================================================
 
 def get_session_series(series_id: str):
@@ -109,7 +134,7 @@ def get_sessions_by_series(series_id: str):
 
 
 # ======================================================================
-# 📌 HISTÓRICAS / EXPIRADAS
+# 📌 EXPIRADAS / HISTÓRICO
 # ======================================================================
 
 def get_expired_sessions():
@@ -123,8 +148,18 @@ def get_expired_sessions():
     )
 
 
+def get_finished_sessions():
+    return (
+        table("sessions")
+        .select("*")
+        .eq("status", "finished")
+        .order("finished_at", desc=True)
+        .execute()
+    )
+
+
 # ======================================================================
-# 📌 LISTA GENERAL
+# 📌 LISTA GENERAL — Engine Monitor
 # ======================================================================
 
 def get_all_sessions():
