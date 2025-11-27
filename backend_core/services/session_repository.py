@@ -1,158 +1,223 @@
-# backend_core/services/session_repository.py
+# ============================================================
+# session_repository.py
+# Capa completa y estable de gestión de sesiones
+# Compatible con todas las vistas del dashboard
+# ============================================================
 
+import uuid
 from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Any
-
 from backend_core.services.supabase_client import table
 
 
-# ============================
-# Helpers
-# ============================
-
-def _now_utc() -> datetime:
-    return datetime.utcnow()
-
-
-def _five_days_from_now() -> datetime:
-    return _now_utc() + timedelta(days=5)
+# ------------------------------------------------------------
+# HELPERS
+# ------------------------------------------------------------
+def _now():
+    return datetime.utcnow().isoformat()
 
 
-def _rows(q) -> list[dict]:
-    res = q.execute()
-    return res or []
-
-
-# ============================
-# CREACIÓN / MUTACIONES
-# ============================
-
-def create_parked_session(product_id: str, capacity: int, series_id: Optional[str] = None) -> str:
+# ------------------------------------------------------------
+# CREATE SESSION (GENÉRICA)
+# ------------------------------------------------------------
+def create_session(product_id: str, capacity: int, status: str = "parked",
+                   module_id: str = None, country: str = "ES",
+                   organization_id: str = None):
     """
-    Crea una sesión en estado 'parked'.
+    Crea una sesión genérica en cualquier estado.
     """
+    session_id = str(uuid.uuid4())
+
     payload = {
+        "id": session_id,
         "product_id": product_id,
-        "aforo": capacity,
-        "status": "parked",
-        "created_at": _now_utc().isoformat(),
-        "expires_at": _five_days_from_now().isoformat(),
+        "capacity": capacity,
+        "pax_registered": 0,
+        "status": status,
+        "module_id": module_id,
+        "country": country,
+        "organization_id": organization_id,
+        "created_at": _now(),
+        "updated_at": _now(),
+        "expires_at": (datetime.utcnow() + timedelta(days=5)).isoformat(),
     }
-    if series_id:
-        payload["series_id"] = series_id
 
-    rows = table("ca_sessions").insert(payload).execute()
-    if not rows:
-        raise RuntimeError("No se pudo crear la sesión parked.")
-    return rows[0]["id"]
+    table("ca_sessions").insert(payload).execute()
+    return session_id
 
 
+# ------------------------------------------------------------
+# CREATE PARKED SESSION
+# ------------------------------------------------------------
+def create_parked_session(product_id: str, capacity: int, country="ES", organization_id=None):
+    return create_session(
+        product_id=product_id,
+        capacity=capacity,
+        status="parked",
+        country=country,
+        organization_id=organization_id
+    )
+
+
+# ------------------------------------------------------------
+# ACTIVATE SESSION
+# ------------------------------------------------------------
 def activate_session(session_id: str):
     """
-    Marca una sesión como 'active' y fija activated_at.
+    Cambia una sesión parked → active.
     """
-    table("ca_sessions").update(
-        {
+    return (
+        table("ca_sessions")
+        .update({
             "status": "active",
-            "activated_at": _now_utc().isoformat(),
-        }
-    ).eq("id", session_id).execute()
+            "activated_at": _now(),
+            "updated_at": _now()
+        })
+        .eq("id", session_id)
+        .execute()
+    )
 
 
+# ------------------------------------------------------------
+# FINISH SESSION (CERRAR)
+# ------------------------------------------------------------
 def finish_session(session_id: str):
     """
-    Marca una sesión como 'finished'.
+    Marca una sesión como finalizada.
     """
-    table("ca_sessions").update(
-        {
+    return (
+        table("ca_sessions")
+        .update({
             "status": "finished",
-            "finished_at": _now_utc().isoformat(),
-        }
-    ).eq("id", session_id).execute()
+            "finished_at": _now(),
+            "updated_at": _now()
+        })
+        .eq("id", session_id)
+        .execute()
+    )
 
 
-def expire_session(session_id: str):
-    """
-    Marca una sesión como 'expired'.
-    """
-    table("ca_sessions").update(
-        {
-            "status": "expired",
-            "expires_at": _now_utc().isoformat(),
-        }
-    ).eq("id", session_id).execute()
-
-
-# ============================
-# LECTURAS POR ESTADO
-# ============================
-
-def get_parked_sessions(operator_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    q = table("ca_sessions").select("*").eq("status", "parked").order("created_at", desc=True)
-    return _rows(q)
-
-
-def get_active_sessions(operator_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    q = table("ca_sessions").select("*").eq("status", "active").order("created_at", desc=True)
-    return _rows(q)
-
-
-def get_finished_sessions(operator_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    q = table("ca_sessions").select("*").eq("status", "finished").order("finished_at", desc=True)
-    return _rows(q)
-
-
-def get_expired_sessions(operator_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    q = table("ca_sessions").select("*").eq("status", "expired").order("expires_at", desc=True)
-    return _rows(q)
-
-
-def get_scheduled_sessions(operator_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    """
-    Para scheduled_sessions.py – sesiones planificadas futuras.
-    """
-    q = table("ca_sessions").select("*").eq("status", "scheduled").order("created_at", desc=True)
-    return _rows(q)
-
-
-def get_standby_sessions(operator_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    """
-    Para standby_sessions.py – sesiones en standby/manual.
-    """
-    q = table("ca_sessions").select("*").eq("status", "standby").order("created_at", desc=True)
-    return _rows(q)
-
-
-def get_all_sessions(operator_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    q = table("ca_sessions").select("*").order("created_at", desc=True)
-    return _rows(q)
-
-
-# ============================
-# SERIES / CHAINS
-# ============================
-
-def get_session_series(operator_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    """
-    Devuelve las series (ca_session_series). Si no existe la tabla,
-    puedes cambiar esto a un DISTINCT series_id sobre ca_sessions.
-    """
-    try:
-        q = table("ca_session_series").select("*").order("created_at", desc=True)
-        return _rows(q)
-    except Exception:
-        # Fallback: series distintas en ca_sessions
-        q = table("ca_sessions").select("series_id").neq("series_id", None)
-        rows = _rows(q)
-        series_ids = sorted({r["series_id"] for r in rows if r.get("series_id")})
-        return [{"id": sid} for sid in series_ids]
-
-
-def get_sessions_by_series(series_id: str, operator_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    q = (
+# ------------------------------------------------------------
+# GET SESSION BY ID
+# ------------------------------------------------------------
+def get_session_by_id(session_id: str):
+    result = (
         table("ca_sessions")
         .select("*")
-        .eq("series_id", series_id)
-        .order("created_at", desc=True)
+        .eq("id", session_id)
+        .single()
+        .execute()
     )
-    return _rows(q)
+    return result
+
+
+# ------------------------------------------------------------
+# GET ALL SESSIONS
+# ------------------------------------------------------------
+def get_all_sessions():
+    return table("ca_sessions").select("*").execute() or []
+
+
+# ------------------------------------------------------------
+# PARKED SESSIONS
+# ------------------------------------------------------------
+def get_parked_sessions(country=None):
+    q = table("ca_sessions").select("*").eq("status", "parked")
+    if country:
+        q = q.eq("country", country)
+    return q.execute() or []
+
+
+# ------------------------------------------------------------
+# ACTIVE SESSIONS
+# ------------------------------------------------------------
+def get_active_sessions(country=None):
+    q = table("ca_sessions").select("*").eq("status", "active")
+    if country:
+        q = q.eq("country", country)
+    return q.execute() or []
+
+
+# ------------------------------------------------------------
+# SCHEDULED SESSIONS
+# ------------------------------------------------------------
+def get_scheduled_sessions(country=None):
+    q = table("ca_sessions").select("*").eq("status", "scheduled")
+    if country:
+        q = q.eq("country", country)
+    return q.execute() or []
+
+
+# ------------------------------------------------------------
+# STANDBY SESSIONS
+# ------------------------------------------------------------
+def get_standby_sessions(country=None):
+    q = table("ca_sessions").select("*").eq("status", "standby")
+    if country:
+        q = q.eq("country", country)
+    return q.execute() or []
+
+
+# ------------------------------------------------------------
+# SESSION SERIES
+# ------------------------------------------------------------
+def get_session_series(product_id: str):
+    return (
+        table("ca_session_series")
+        .select("*")
+        .eq("product_id", product_id)
+        .execute()
+    ) or []
+
+
+# ------------------------------------------------------------
+# PARTICIPANTS
+# ------------------------------------------------------------
+def get_participants_for_session(session_id: str):
+    return (
+        table("ca_session_participants")
+        .select("*")
+        .eq("session_id", session_id)
+        .execute()
+    ) or []
+
+
+# ------------------------------------------------------------
+# ADD TEST PARTICIPANT
+# ------------------------------------------------------------
+def add_test_participant(session_id: str, user_id=None):
+    participant_id = str(uuid.uuid4())
+
+    payload = {
+        "id": participant_id,
+        "session_id": session_id,
+        "user_id": user_id or ("test_user_" + participant_id[:6]),
+        "is_awarded": False,
+        "created_at": _now(),
+    }
+
+    (
+        table("ca_session_participants")
+        .insert(payload)
+        .execute()
+    )
+
+    # Incrementar pax_registered
+    table("ca_sessions").update({
+        "pax_registered": "pax_registered + 1",
+        "updated_at": _now()
+    }).eq("id", session_id).execute()
+
+    return participant_id
+
+
+# ------------------------------------------------------------
+# CREATE NEXT SESSION (ROLLING)
+# ------------------------------------------------------------
+def create_next_session(previous_session):
+    return create_session(
+        product_id=previous_session["product_id"],
+        capacity=previous_session["capacity"],
+        status="parked",
+        country=previous_session.get("country", "ES"),
+        organization_id=previous_session.get("organization_id"),
+    )
