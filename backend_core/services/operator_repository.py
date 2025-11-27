@@ -38,7 +38,7 @@ def list_operators(active_only=True, country=None):
 
 
 # =========================================================
-# INFORMACIÓN DE OPERADOR
+# INFO DE OPERADOR
 # =========================================================
 def get_operator(operator_id: str):
     q = (
@@ -51,10 +51,31 @@ def get_operator(operator_id: str):
 
 
 def get_operator_info(operator_id: str):
-    """
-    Alias solicitado por varias vistas.
-    """
     return get_operator(operator_id)
+
+
+# =========================================================
+# CAMPOS REQUERIDOS POR VARIAS VISTAS
+# =========================================================
+def get_operator_allowed_countries(operator_id: str):
+    op = get_operator(operator_id)
+    if not op:
+        return []
+    return op.get("allowed_countries", [])
+
+
+def get_operator_role(operator_id: str):
+    op = get_operator(operator_id)
+    if not op:
+        return None
+    return op.get("role")
+
+
+def get_operator_country(operator_id: str):
+    op = get_operator(operator_id)
+    if not op:
+        return None
+    return op.get("country")
 
 
 # =========================================================
@@ -113,7 +134,7 @@ def disable_operator(operator_id: str):
 
 
 # =========================================================
-# FILTROS AVANZADOS
+# FILTROS
 # =========================================================
 def list_operators_by_role(role: str):
     q = table("ca_operators").select("*").eq("role", role)
@@ -132,3 +153,13 @@ def search_operators(text: str):
         .ilike("full_name", f"%{text}%")
     )
     return _fetch_many(q)
+
+
+# =========================================================
+# KYC LOGS (placeholder)
+# =========================================================
+def list_operator_kyc_logs(operator_id: str):
+    """
+    Placeholder — evita errores mientras se crea el módulo real.
+    """
+    return []
