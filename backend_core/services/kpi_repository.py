@@ -1,113 +1,106 @@
 # backend_core/services/kpi_repository.py
 
 from backend_core.services.supabase_client import table
+from backend_core.services.operator_repository import ensure_country_filter
 
 
-# ---------------------------------------------------------
-# Helpers internos
-# ---------------------------------------------------------
-def _fetch_one(query):
+# ==========================================================================
+# HELPERS
+# ==========================================================================
+
+def _count(q):
     try:
-        result = query.execute()
-        return result[0] if result else None
-    except:
-        return None
+        res = q.execute()
+        if isinstance(res, list):
+            return len(res)
+        if isinstance(res, dict) and res.get("data"):
+            return len(res["data"])
+        return 0
+    except Exception:
+        return 0
 
 
-def _fetch_many(query):
-    try:
-        result = query.execute()
-        return result if result else []
-    except:
-        return []
+# ==========================================================================
+# KPIs GENERALES — PARA DASHBOARD
+# ==========================================================================
 
-
-# ---------------------------------------------------------
-# KPI — Sesiones
-# ---------------------------------------------------------
-def get_kpi_sessions_active(country=None):
-    q = table("ca_sessions").select("id", count="exact").eq("status", "active")
-    if country:
-        q = q.eq("country", country)
-    res = q.execute()
-    return res.count if hasattr(res, "count") else 0
-
-
-def get_kpi_sessions_finished(country=None):
-    q = table("ca_sessions").select("id", count="exact").eq("status", "finished")
-    if country:
-        q = q.eq("country", country)
-    res = q.execute()
-    return res.count if hasattr(res, "count") else 0
-
-
-def get_kpi_sessions_expired(country=None):
-    q = table("ca_sessions").select("id", count="exact").eq("status", "expired")
-    if country:
-        q = q.eq("country", country)
-    res = q.execute()
-    return res.count if hasattr(res, "count") else 0
-
-
-def get_kpi_sessions_parked(country=None):
-    q = table("ca_sessions").select("id", count="exact").eq("status", "parked")
-    if country:
-        q = q.eq("country", country)
-    res = q.execute()
-    return res.count if hasattr(res, "count") else 0
-
-
-# ---------------------------------------------------------
-# KPI — Productos
-# ---------------------------------------------------------
-def get_kpi_products_total(country=None):
-    q = table("products_v2").select("id", count="exact")
-    if country:
-        q = q.eq("country", country)
-    res = q.execute()
-    return res.count if hasattr(res, "count") else 0
-
-
-# ---------------------------------------------------------
-# KPI — Proveedores
-# ---------------------------------------------------------
-def get_kpi_providers_total(country=None):
-    q = table("providers_v2").select("id", count="exact")
-    if country:
-        q = q.eq("country", country)
-    res = q.execute()
-    return res.count if hasattr(res, "count") else 0
-
-
-# ---------------------------------------------------------
-# KPI — Categorías
-# ---------------------------------------------------------
-def get_kpi_categories_total():
-    res = table("categorias_v2").select("id", count="exact").execute()
-    return res.count if hasattr(res, "count") else 0
-
-
-# ---------------------------------------------------------
-# KPI — Wallets (placeholder operativo)
-# ---------------------------------------------------------
-def get_kpi_wallets_total(country=None):
+def sessions_active(operator_id: str, country: str):
     """
-    Placeholder. En el futuro leerá de wallets reales.
-    De momento contamos usuarios con wallet asociada.
+    Total de sesiones activas en un país (filtrado por permisos del operador)
     """
-    q = table("app_users_v2").select("id", count="exact")
-    if country:
-        q = q.eq("country", country)
-    res = q.execute()
-    return res.count if hasattr(res, "count") else 0
+    c = ensure_country_filter(operator_id, country)
+    if not c:
+        return 0
+
+    q = (
+        table("ca_sessions")
+        .select("id")
+        .eq("country", c)
+        .eq("status", "active")
+    )
+    return _count(q)
 
 
-# ---------------------------------------------------------
-# KPI — Operadores
-# ---------------------------------------------------------
-def get_kpi_operators_total(country=None):
-    q = table("ca_operators").select("id", count="exact").eq("active", True)
-    if country:
-        q = q.eq("country", country)
-    res = q.execute()
-    return res.count if hasattr(res, "count") else 0
+def sessions_parked(operator_id: str, country: str):
+    c = ensure_country_filter(operator_id, country)
+    if not c:
+        return 0
+
+    q = (
+        table("ca_sessions")
+        .select("id")
+        .eq("country", c)
+        .eq("status", "parked")
+    )
+    return _count(q)
+
+
+def sessions_finished(operator_id: str, country: str):
+    c = ensure_country_filter(operator_id, country)
+    if not c:
+        return 0
+
+    q = (
+        table("ca_sessions")
+        .select("id")
+        .eq("country", c)
+        .eq("status", "finished")
+    )
+    return _count(q)
+
+
+def sessions_expired(operator_id: str, country: str):
+    c = ensure_country_filter(operator_id, country)
+    if not c:
+        return 0
+
+    q = (
+        table("ca_sessions")
+        .select("id")
+        .eq("country", c)
+        .eq("status", "expired")
+    )
+    return _count(q)
+
+
+# ==========================================================================
+# WALLET KPIs (placeholder profesional)
+# ==========================================================================
+
+def get_kpi_wallets_total(operator_id: str, country: str):
+    """
+    Placeholder para evitar fallos de importación.
+    """
+    c = ensure_country_filter(operator_id, country)
+    if not c:
+        return 0
+
+    # Future: sumar wallets
+    return 0
+
+
+def get_kpi_wallets_pending(operator_id: str, country: str):
+    c = ensure_country_filter(operator_id, country)
+    if not c:
+        return 0
+    return 0
