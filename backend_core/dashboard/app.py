@@ -88,6 +88,8 @@ def render_page(page: str):
         "Admin Operators KYC": safe_import("admin_operators_kyc", "render_admin_operators_kyc"),
         "Admin Engine": safe_import("admin_engine", "render_admin_engine"),
         "Contract Payment Status": safe_import("contract_payment_status", "render_contract_payment_status"),
+        "Operator Debug": safe_import("operator_debug", "render_operator_debug"),
+
     }
 
     render_function = routes.get(page)
