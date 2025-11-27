@@ -3,72 +3,111 @@
 from backend_core.services.supabase_client import table
 
 
-# ============================
+# ---------------------------------------------------------
 # Helpers internos
-# ============================
-
-def _count_rows(tbl_name: str, **filters) -> int:
-    q = table(tbl_name).select("id")
-    for col, value in filters.items():
-        q = q.eq(col, value)
-    rows = q.execute()
-    return len(rows) if rows else 0
-
-
-# ============================
-# KPIs de sesiones
-# ============================
-
-def sessions_active(operator_id: str | None = None) -> int:
-    # Por ahora no filtramos por operator_id; la segmentación se hace aguas arriba.
-    return _count_rows("ca_sessions", status="active")
+# ---------------------------------------------------------
+def _fetch_one(query):
+    try:
+        result = query.execute()
+        return result[0] if result else None
+    except:
+        return None
 
 
-def sessions_finished(operator_id: str | None = None) -> int:
-    return _count_rows("ca_sessions", status="finished")
+def _fetch_many(query):
+    try:
+        result = query.execute()
+        return result if result else []
+    except:
+        return []
 
 
-def sessions_expired(operator_id: str | None = None) -> int:
-    return _count_rows("ca_sessions", status="expired")
+# ---------------------------------------------------------
+# KPI — Sesiones
+# ---------------------------------------------------------
+def get_kpi_sessions_active(country=None):
+    q = table("ca_sessions").select("id", count="exact").eq("status", "active")
+    if country:
+        q = q.eq("country", country)
+    res = q.execute()
+    return res.count if hasattr(res, "count") else 0
 
 
-# Aliases esperados por las vistas antiguas
-def get_kpi_sessions_active(operator_id: str | None = None) -> int:
-    return sessions_active(operator_id)
+def get_kpi_sessions_finished(country=None):
+    q = table("ca_sessions").select("id", count="exact").eq("status", "finished")
+    if country:
+        q = q.eq("country", country)
+    res = q.execute()
+    return res.count if hasattr(res, "count") else 0
 
 
-def get_kpi_sessions_finished(operator_id: str | None = None) -> int:
-    return sessions_finished(operator_id)
+def get_kpi_sessions_expired(country=None):
+    q = table("ca_sessions").select("id", count="exact").eq("status", "expired")
+    if country:
+        q = q.eq("country", country)
+    res = q.execute()
+    return res.count if hasattr(res, "count") else 0
 
 
-def get_kpi_sessions_expired(operator_id: str | None = None) -> int:
-    return sessions_expired(operator_id)
+def get_kpi_sessions_parked(country=None):
+    q = table("ca_sessions").select("id", count="exact").eq("status", "parked")
+    if country:
+        q = q.eq("country", country)
+    res = q.execute()
+    return res.count if hasattr(res, "count") else 0
 
 
-# ============================
-# KPIs de wallet
-# ============================
-
-def wallet_deposit_ok(operator_id: str | None = None) -> int:
-    # Ejemplo: nº de sesiones con depósito OK (si tienes otra lógica, la ajustamos luego)
-    return _count_rows("ca_payment_sessions", status="deposit_ok")
-
-
-def wallets_total(operator_id: str | None = None) -> int:
-    return _count_rows("ca_wallets")
+# ---------------------------------------------------------
+# KPI — Productos
+# ---------------------------------------------------------
+def get_kpi_products_total(country=None):
+    q = table("products_v2").select("id", count="exact")
+    if country:
+        q = q.eq("country", country)
+    res = q.execute()
+    return res.count if hasattr(res, "count") else 0
 
 
-# ============================
-# KPIs de catálogo
-# ============================
+# ---------------------------------------------------------
+# KPI — Proveedores
+# ---------------------------------------------------------
+def get_kpi_providers_total(country=None):
+    q = table("providers_v2").select("id", count="exact")
+    if country:
+        q = q.eq("country", country)
+    res = q.execute()
+    return res.count if hasattr(res, "count") else 0
 
-def providers_total(operator_id: str | None = None) -> int:
-    return _count_rows("providers_v2", active=True)
+
+# ---------------------------------------------------------
+# KPI — Categorías
+# ---------------------------------------------------------
+def get_kpi_categories_total():
+    res = table("categorias_v2").select("id", count="exact").execute()
+    return res.count if hasattr(res, "count") else 0
 
 
-def products_total(operator_id: str | None = None) -> int:
-    return _count_rows("products_v2", active=True)
+# ---------------------------------------------------------
+# KPI — Wallets (placeholder operativo)
+# ---------------------------------------------------------
+def get_kpi_wallets_total(country=None):
+    """
+    Placeholder. En el futuro leerá de wallets reales.
+    De momento contamos usuarios con wallet asociada.
+    """
+    q = table("app_users_v2").select("id", count="exact")
+    if country:
+        q = q.eq("country", country)
+    res = q.execute()
+    return res.count if hasattr(res, "count") else 0
 
 
-def categories_total(operator_id: str | None = None) -> int:
-    return _count_rows("categorias_v2", is_active=True)
+# ---------------------------------------------------------
+# KPI — Operadores
+# ---------------------------------------------------------
+def get_kpi_operators_total(country=None):
+    q = table("ca_operators").select("id", count="exact").eq("active", True)
+    if country:
+        q = q.eq("country", country)
+    res = q.execute()
+    return res.count if hasattr(res, "count") else 0
