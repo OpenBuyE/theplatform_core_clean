@@ -2,9 +2,10 @@
 
 from backend_core.services.supabase_client import table
 
-# ================================================================
+
+# =================================================================
 # 📌 PRODUCTOS
-# ================================================================
+# =================================================================
 
 def list_products_v2():
     return (
@@ -25,7 +26,6 @@ def get_product_v2(product_id: str):
     )
 
 
-# Alias moderno
 def get_product(product_id: str):
     return get_product_v2(product_id)
 
@@ -43,9 +43,21 @@ def update_product(product_id: str, data: dict):
     )
 
 
-# ================================================================
+def filter_products(text: str = "", category_id: str = None):
+    q = table("products_v2").select("*")
+
+    if text:
+        q = q.ilike("name", f"%{text}%")
+
+    if category_id:
+        q = q.eq("category_id", category_id)
+
+    return q.order("created_at", desc=True).execute()
+
+
+# =================================================================
 # 📌 CATEGORÍAS
-# ================================================================
+# =================================================================
 
 def list_categories():
     return (
@@ -69,6 +81,10 @@ def update_category(category_id: str, data: dict):
     )
 
 
+def delete_category(category_id: str):
+    return table("product_categories").delete().eq("id", category_id).execute()
+
+
 def get_category_by_id(category_id: str):
     return (
         table("product_categories")
@@ -79,9 +95,9 @@ def get_category_by_id(category_id: str):
     )
 
 
-# ================================================================
+# =================================================================
 # 📌 PROVEEDORES
-# ================================================================
+# =================================================================
 
 def list_providers_v2():
     return (
@@ -100,19 +116,3 @@ def get_provider_by_id(provider_id: str):
         .single()
         .execute()
     )
-
-
-# ================================================================
-# 📌 BUSCADOR / FILTRO AVANZADO
-# ================================================================
-
-def filter_products(text: str = "", category_id: str = None):
-    q = table("products_v2").select("*")
-
-    if text:
-        q = q.ilike("name", f"%{text}%")
-
-    if category_id:
-        q = q.eq("category_id", category_id)
-
-    return q.order("created_at", desc=True).execute()
