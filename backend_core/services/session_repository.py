@@ -6,7 +6,7 @@ from backend_core.services.operator_repository import ensure_country_filter
 
 
 # ============================================================
-# CREAR SESIÓN PARKED
+# CREAR SESIÓN
 # ============================================================
 
 def create_session(product_id, capacity, country, module_id=None):
@@ -22,23 +22,21 @@ def create_session(product_id, capacity, country, module_id=None):
     result = table("ca_sessions").insert(rec).execute()
     return result[0]["id"]
 
-
-# Alias legacy para compatibilidad
-create_parked_session = create_session
+create_parked_session = create_session   # alias compatibilidad
 
 
 # ============================================================
-# LISTAR SESIONES PARKED
+# PARKED
 # ============================================================
 
 def get_parked_sessions(operator=None):
     if operator:
-        field, countries = ensure_country_filter(operator)
+        field, allowed = ensure_country_filter(operator)
         return (
             table("ca_sessions")
             .select("*")
             .eq("status", "parked")
-            .in_(field, countries)
+            .in_(field, allowed)
             .order("created_at", desc=True)
             .execute()
         )
@@ -69,17 +67,17 @@ def activate_session(session_id):
 
 
 # ============================================================
-# SESIONES ACTIVAS
+# ACTIVAS
 # ============================================================
 
 def get_active_sessions(operator=None):
     if operator:
-        field, countries = ensure_country_filter(operator)
+        field, allowed = ensure_country_filter(operator)
         return (
             table("ca_sessions")
             .select("*")
             .eq("status", "active")
-            .in_(field, countries)
+            .in_(field, allowed)
             .order("activated_at", desc=True)
             .execute()
         )
@@ -94,7 +92,7 @@ def get_active_sessions(operator=None):
 
 
 # ============================================================
-# LISTAR PARTICIPANTES DE UNA SESIÓN
+# PARTICIPANTES
 # ============================================================
 
 def get_participants_for_session(session_id):
@@ -108,10 +106,10 @@ def get_participants_for_session(session_id):
 
 
 # ============================================================
-# CADENAS / SERIES
+# SERIES / CHAINS
 # ============================================================
 
-def get_session_series(session_id, operator=None):
+def get_session_series(session_id):
     session = (
         table("ca_sessions")
         .select("*")
@@ -123,44 +121,25 @@ def get_session_series(session_id, operator=None):
     if not session or not session.get("series"):
         return []
 
-    series = session["series"]
-
-    if operator:
-        field, countries = ensure_country_filter(operator)
-        return (
-            table("ca_sessions")
-            .select("*")
-            .eq("series", series)
-            .in_(field, countries)
-            .order("created_at", desc=True)
-            .execute()
-        )
+    ser = session["series"]
 
     return (
         table("ca_sessions")
         .select("*")
-        .eq("series", series)
+        .eq("series", ser)
         .order("created_at", desc=True)
         .execute()
     )
 
+# alias compatibilidad
+get_sessions_by_series = get_session_series
+
 
 # ============================================================
-# SESIONES FINALIZADAS
+# FINALIZADAS
 # ============================================================
 
-def get_finished_sessions(operator=None):
-    if operator:
-        field, countries = ensure_country_filter(operator)
-        return (
-            table("ca_sessions")
-            .select("*")
-            .eq("status", "finished")
-            .in_(field, countries)
-            .order("finished_at", desc=True)
-            .execute()
-        )
-
+def get_finished_sessions():
     return (
         table("ca_sessions")
         .select("*")
@@ -171,12 +150,11 @@ def get_finished_sessions(operator=None):
 
 
 # ============================================================
-# EXPIRADAS (más de 5 días)
+# EXPIRADAS (>5 días)
 # ============================================================
 
 def get_expired_sessions():
     cutoff = (datetime.utcnow() - timedelta(days=5)).isoformat()
-
     return (
         table("ca_sessions")
         .select("*")
@@ -202,22 +180,15 @@ def finish_session(session_id, winner_participant_id=None):
         .execute()
     )
 
+# alias compatibilidad
+mark_session_finished = finish_session
+
 
 # ============================================================
-# SESIONES (GENÉRICO)
+# LISTAR TODAS LAS SESIONES (para Engine Monitor)
 # ============================================================
 
-def get_sessions(operator=None):
-    if operator:
-        field, countries = ensure_country_filter(operator)
-        return (
-            table("ca_sessions")
-            .select("*")
-            .in_(field, countries)
-            .order("created_at", desc=True)
-            .execute()
-        )
-
+def get_all_sessions():
     return (
         table("ca_sessions")
         .select("*")
@@ -227,7 +198,7 @@ def get_sessions(operator=None):
 
 
 # ============================================================
-# OBTENER SESIÓN POR ID
+# POR ID
 # ============================================================
 
 def get_session_by_id(session_id):
