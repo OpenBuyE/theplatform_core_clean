@@ -1,3 +1,5 @@
-# Make backend_core a proper Python package
-from .dashboard import app
-
+# backend_core/__init__.py
+"""
+Backend Core package initializer.
+Asegura que las rutas del dashboard y services estén accesibles.
+"""
