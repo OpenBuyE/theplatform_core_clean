@@ -4,8 +4,9 @@ from backend_core.services.supabase_client import table
 
 
 # ============================================================
-# HELPERS
+# HASHING
 # ============================================================
+
 def hash_password(password: str) -> str:
     """Hash seguro usando bcrypt."""
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
@@ -58,7 +59,7 @@ def update_operator(operator_id: str, updates: dict):
 
 
 def delete_operator(operator_id: str):
-    """Desactiva operador, no borramos por seguridad."""
+    """Desactiva operador (soft delete)."""
     return (
         table("ca_operators")
         .update({"active": False})
@@ -68,7 +69,7 @@ def delete_operator(operator_id: str):
 
 
 def list_operators():
-    """Listado completo para panel Admin/Backoffice."""
+    """Listado completo para panel Admin/KYC."""
     return table("ca_operators").select("*").execute()
 
 
@@ -84,24 +85,7 @@ def get_operator_info(operator_id: str):
 
 
 # ============================================================
-# SEGURIDAD MULTI-PAÍS
-# ============================================================
-
-def ensure_country_filter(operator: dict, target_country: str) -> bool:
-    """
-    Seguridad estricta:
-    - Admin Master y God → acceso total
-    - Operadores normales → acceso SOLO si el país está permitido
-    """
-    if operator.get("role") in ("admin_master", "god"):
-        return True
-
-    allowed = operator.get("allowed_countries", [])
-    return target_country in allowed
-
-
-# ============================================================
-# BUSCAR POR EMAIL (LOGIN)
+# LOGIN: BÚSQUEDA POR EMAIL
 # ============================================================
 
 def find_by_email(email: str):
@@ -116,14 +100,55 @@ def find_by_email(email: str):
 
 
 # ============================================================
-# AUTOCREACIÓN DEL GLOBAL ADMIN
+# SEGURIDAD MULTI-PAÍS
+# ============================================================
+
+def ensure_country_filter(operator: dict, target_country: str) -> bool:
+    """
+    Seguridad estricta:
+    - Admin Master y God → acceso total
+    - Otros operadores → acceso solo si el país está permitido
+    """
+    if operator.get("role") in ("admin_master", "god"):
+        return True
+
+    allowed = operator.get("allowed_countries", [])
+    return target_country in allowed
+
+
+# ============================================================
+# KYC LOGS (para Admin Operators KYC)
+# ============================================================
+
+def add_operator_kyc_log(operator_id: str, action: str, notes: str = ""):
+    """Inserta un registro KYC para un operador."""
+    entry = {
+        "operator_id": operator_id,
+        "action": action,
+        "notes": notes,
+    }
+    return table("ca_operator_kyc_logs").insert(entry).execute()
+
+
+def list_operator_kyc_logs(operator_id: str):
+    """Lista todos los logs KYC de un operador."""
+    return (
+        table("ca_operator_kyc_logs")
+        .select("*")
+        .eq("operator_id", operator_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+
+# ============================================================
+# AUTO-CREACIÓN DEL GLOBAL ADMIN
 # ============================================================
 
 def create_builtin_global_admin():
     """
     Crea automáticamente el GlobalAdmin si NO existe.
     Nunca reemplaza, nunca duplica.
-    Es la forma más robusta y segura.
     """
     try:
         existing = (
