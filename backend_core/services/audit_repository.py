@@ -1,98 +1,78 @@
-# backend_core/services/audit_repository.py
-
 from datetime import datetime
 from backend_core.services.supabase_client import table
-from backend_core.services.operator_repository import ensure_country_filter
 
 
-# ============================================================
-# REGISTRO DE EVENTOS
-# ============================================================
+# ===========================================================
+# 🔹 Registrar evento (estándar)
+# ===========================================================
 
-def log_event(event_type, session_id=None, operator_id=None, metadata=None):
-    record = {
+def log_event(
+    event_type: str,
+    operator_id: str = None,
+    session_id: str = None,
+    extra: dict = None
+):
+    """
+    Registra cualquier evento en audit_log.
+    """
+    payload = {
         "event_type": event_type,
-        "session_id": session_id,
         "operator_id": operator_id,
-        "metadata": metadata or {},
-        "created_at": datetime.utcnow().isoformat(),
+        "session_id": session_id,
+        "timestamp": datetime.utcnow().isoformat(),
+        "extra": extra or {},
     }
-    res = table("ca_audit_logs").insert(record).execute()
-    return res[0] if res else None
+
+    return table("audit_log").insert(payload).execute()
 
 
-# ============================================================
-# CONSULTAS GENERALES
-# ============================================================
+# ===========================================================
+# 🔹 Obtener logs de un operador concreto
+# ===========================================================
 
-def get_all_logs(limit=500):
+def get_all_logs_for_operator(operator_id: str):
+    """
+    Devuelve todos los logs filtrados por operador.
+    """
     return (
-        table("ca_audit_logs")
+        table("audit_log")
         .select("*")
-        .order("created_at", desc=True)
-        .limit(limit)
+        .eq("operator_id", operator_id)
+        .order("timestamp", desc=True)
         .execute()
     )
 
 
-def get_all_logs_for_operator(operator, limit=500):
-    field, countries = ensure_country_filter(operator)
-    return (
-        table("ca_audit_logs")
-        .select("*")
-        .in_(field, countries)
-        .order("created_at", desc=True)
-        .limit(limit)
-        .execute()
-    )
-
-
-def get_logs_for_session(session_id: str):
-    return (
-        table("ca_audit_logs")
-        .select("*")
-        .eq("session_id", session_id)
-        .order("created_at", asc=True)
-        .execute()
-    )
-
-
-def get_logs_by_event_type(event_type: str):
-    return (
-        table("ca_audit_logs")
-        .select("*")
-        .eq("event_type", event_type)
-        .order("created_at", desc=True)
-        .execute()
-    )
-
+# ===========================================================
+# 🔹 Obtener detalles específicos de un log (legacy)
+# ===========================================================
 
 def get_log_details(log_id: str):
+    """
+    Devuelve un único registro de log.
+    """
     return (
-        table("ca_audit_logs")
+        table("audit_log")
         .select("*")
         .eq("id", log_id)
-        .single()
+        .maybe_single()
         .execute()
     )
 
 
-def get_adjudication_log(session_id: str):
+# ===========================================================
+# 🔹 UTILIDAD PEDIDA POR ENGINE MONITOR
+# ===========================================================
+
+def list_audit_logs(limit: int = 200):
     """
-    Último log de adjudicación para una sesión.
-    Usado por Session Chains / Session History.
+    Devuelve lista de audit logs recientes.
+    Engine Monitor depende de esta función.
     """
     return (
-        table("ca_audit_logs")
+        table("audit_log")
         .select("*")
-        .eq("session_id", session_id)
-        .eq("event_type", "session_adjudicated")
-        .order("created_at", desc=True)
-        .limit(1)
-        .single()
+        .order("timestamp", desc=True)
+        .limit(limit)
         .execute()
     )
-
-
-def count_logs():
-    return table("ca_audit_logs").select("id", count="exact").execute()
