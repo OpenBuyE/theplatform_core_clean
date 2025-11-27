@@ -1,63 +1,90 @@
 # backend_core/services/audit_repository.py
 
-from typing import List, Dict, Any, Optional
-
+import uuid
+from datetime import datetime
 from backend_core.services.supabase_client import table
 
 
-# ======================================================
-# LOGS GENERALES
-# ======================================================
+# ======================================================================
+# REGISTRO DE AUDITORÍA
+# ======================================================================
 
-def get_all_logs_for_operator(operator_id: str) -> List[Dict[str, Any]]:
+def log_event(event_type: str, session_id: str = None, details: dict = None, operator_id: str = None):
     """
-    Devuelve todos los logs relacionados con un operador.
-    Asumimos campo operator_id y opcionalmente country_code, etc.
+    Guarda un evento en la tabla ca_audit_logs.
+    Compatible con TODAS las vistas que llaman log_event().
     """
-    q = (
+
+    payload = {
+        "id": str(uuid.uuid4()),
+        "event_type": event_type,
+        "session_id": session_id,
+        "operator_id": operator_id,
+        "details": details or {},
+        "created_at": datetime.utcnow().isoformat(),
+    }
+
+    table("ca_audit_logs").insert(payload).execute()
+
+    return True
+
+
+# ======================================================================
+# OBTENER LOGS POR OPERADOR
+# ======================================================================
+
+def get_all_logs_for_operator(operator_id: str):
+    """
+    Devuelve todos los eventos de auditoría generados por un operador.
+    Usado por Admin Logs.
+    """
+    result = (
         table("ca_audit_logs")
         .select("*")
         .eq("operator_id", operator_id)
         .order("created_at", desc=True)
+        .execute()
     )
-    rows = q.execute()
-    return rows or []
+
+    return result or []
 
 
-def get_log_details(log_id: str, operator_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    q = table("ca_audit_logs").select("*").eq("id", log_id)
-    if operator_id:
-        q = q.eq("operator_id", operator_id)
-    rows = q.execute()
-    if not rows:
-        return None
-    return rows[0]
+# ======================================================================
+# LOGS FILTRADOS POR SESIÓN
+# ======================================================================
 
-
-# ======================================================
-# LOGS DE ADJUDICACIÓN DETERMINISTA
-# ======================================================
-
-def get_adjudication_log(session_id: str) -> Optional[Dict[str, Any]]:
+def get_adjudication_log(session_id: str):
     """
-    Devuelve el último log de adjudicación para una sesión.
-    Asumimos que se registra en ca_audit_logs con event_type = 'session_adjudicated'.
+    Obtiene logs de adjudicación para una sesión.
+    Necesario para Session History, Session Chains, etc.
     """
-    q = (
+    result = (
         table("ca_audit_logs")
         .select("*")
         .eq("session_id", session_id)
-        .eq("event_type", "session_adjudicated")
         .order("created_at", desc=True)
+        .execute()
     )
-    rows = q.execute()
-    if not rows:
-        return None
-    return rows[0]
+
+    return result or []
 
 
-# Compatibilidad con versiones anteriores (engine_monitor antiguo)
-def list_audit_logs() -> List[Dict[str, Any]]:
-    q = table("ca_audit_logs").select("*").order("created_at", desc=True)
-    rows = q.execute()
-    return rows or []
+# ======================================================================
+# TODOS LOS LOGS (ADMIN MASTER)
+# ======================================================================
+
+def get_all_logs(limit: int = 200):
+    """
+    Devuelve los logs más recientes del sistema.
+    Usado por Engine Monitor y Admin Engine.
+    """
+
+    result = (
+        table("ca_audit_logs")
+        .select("*")
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+
+    return result or []
