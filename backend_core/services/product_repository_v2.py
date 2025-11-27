@@ -1,118 +1,80 @@
 # backend_core/services/product_repository_v2.py
 
-from datetime import datetime
 from backend_core.services.supabase_client import table
-from backend_core.services.operator_repository import ensure_country_filter
 
 
-# ============================================================
-# LISTAR PRODUCTOS (V2)
-# ============================================================
+# ======================================================
+# PRODUCTOS — LISTADO
+# ======================================================
 
-def list_products_v2(operator=None):
-    """
-    Lista productos con filtro multi-país.
-    """
-    if operator:
-        field, countries = ensure_country_filter(operator)
-        return (
-            table("products_v2")
-            .select("*")
-            .in_(field, countries)
-            .order("created_at", desc=True)
-            .execute()
-        )
-
+def list_products():
     return (
-        table("products_v2")
+        table("ca_products")
         .select("*")
         .order("created_at", desc=True)
         .execute()
     )
 
 
-# ============================================================
-# OBTENER PRODUCTO
-# ============================================================
+# ======================================================
+# FILTRO PARA PRODUCT CATALOG PRO
+# ======================================================
 
-def get_product_v2(product_id: str):
-    result = (
-        table("products_v2")
+def filter_products(search: str = "", category: str = None):
+    q = table("ca_products").select("*")
+
+    if search:
+        q = q.ilike("name", f"%{search}%")
+
+    if category:
+        q = q.eq("category_id", category)
+
+    return q.order("created_at", desc=True).execute()
+
+
+# ======================================================
+# CRUD PRODUCTOS
+# ======================================================
+
+def create_product(data: dict):
+    """
+    Compatible con el código legacy que llama create_product()
+    """
+    return (
+        table("ca_products")
+        .insert(data)
+        .execute()
+    )
+
+
+def get_product(product_id: str):
+    return (
+        table("ca_products")
         .select("*")
         .eq("id", product_id)
         .single()
         .execute()
     )
-    return result
 
 
-# ============================================================
-# CREAR PRODUCTO
-# ============================================================
+# ======================================================
+# CATEGORÍAS
+# ======================================================
 
-def create_product_v2(data: dict):
-    data["created_at"] = datetime.utcnow().isoformat()
-    res = table("products_v2").insert(data).execute()
-    return res[0] if res else None
-
-
-# ============================================================
-# ACTUALIZAR PRODUCTO
-# ============================================================
-
-def update_product_v2(product_id: str, data: dict):
-    data["updated_at"] = datetime.utcnow().isoformat()
-    res = (
-        table("products_v2")
-        .update(data)
-        .eq("id", product_id)
-        .execute()
-    )
-    return res[0] if res else None
-
-
-# ============================================================
-# ELIMINAR PRODUCTO
-# ============================================================
-
-def delete_product_v2(product_id: str):
+def list_categories():
     return (
-        table("products_v2")
-        .delete()
-        .eq("id", product_id)
-        .execute()
-    )
-
-
-# ============================================================
-# PROVEEDORES (compatibilidad)
-# ============================================================
-
-def list_providers_v2():
-    """
-    Alias para compatibilidad con vistas antiguas.
-    """
-    return (
-        table("providers_v2")
+        table("ca_categories")
         .select("*")
         .order("name", asc=True)
         .execute()
     )
 
 
-# ============================================================
-# COMPATIBILIDAD LEGACY
-# ============================================================
-
-def list_products():
-    """
-    Alias legacy usado por vistas antiguas.
-    """
-    return list_products_v2()
-
-
-def get_product(product_id: str):
-    """
-    Alias legacy (Engine Monitor y Product Details Pro lo usan).
-    """
-    return get_product_v2(product_id)
+def get_category_by_id(category_id: str):
+    return (
+        table("ca_categories")
+        .select("*")
+        .eq("id", category_id)
+        .single()
+        .execute()
+    )
