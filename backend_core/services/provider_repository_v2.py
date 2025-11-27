@@ -1,48 +1,102 @@
 # backend_core/services/provider_repository_v2.py
 
-from typing import List, Dict, Any, Optional
+from datetime import datetime
 from backend_core.services.supabase_client import table
+from backend_core.services.operator_repository import ensure_country_filter
 
 
-def list_providers_v2() -> List[Dict[str, Any]]:
-    rows = table("providers_v2").select("*").order("created_at", desc=True).execute()
-    return rows or []
+# ============================================================
+# LISTAR PROVEEDORES (con filtro multi-país profesional)
+# ============================================================
 
-
-def list_providers_safe(country_codes: Optional[list[str]] = None) -> List[Dict[str, Any]]:
+def list_providers(operator=None):
     """
-    Versión 'safe' para UI: solo proveedores activos, opcionalmente filtrados por país.
-    Asumimos columna active y opcional country_code.
+    Devuelve la lista de proveedores.
+    Si se pasa un operador autenticado, se aplica control por país,
+    rol y permisos avanzados mediante ensure_country_filter().
     """
-    q = table("providers_v2").select("*").eq("active", True)
+    if operator:
+        field, countries = ensure_country_filter(operator)
+        return (
+            table("ca_providers")
+            .select("*")
+            .in_(field, countries)
+            .order("created_at", asc=True)
+            .execute()
+        )
 
-    if country_codes:
-        # si tienes campo country_code, puedes hacer or_ con ellos; aquí lo dejamos simple
-        # q = q.in_("country_code", country_codes)
-        pass
-
-    rows = q.order("created_at", desc=True).execute()
-    return rows or []
-
-
-def get_provider(provider_id: str) -> Optional[Dict[str, Any]]:
-    rows = table("providers_v2").select("*").eq("id", provider_id).execute()
-    return rows[0] if rows else None
-
-
-def create_provider(payload: Dict[str, Any]) -> Dict[str, Any]:
-    rows = table("providers_v2").insert(payload).execute()
-    if not rows:
-        raise RuntimeError("No se pudo crear el proveedor.")
-    return rows[0]
+    return (
+        table("ca_providers")
+        .select("*")
+        .order("created_at", asc=True)
+        .execute()
+    )
 
 
-def update_provider(provider_id: str, **fields) -> Dict[str, Any]:
-    rows = table("providers_v2").update(fields).eq("id", provider_id).execute()
-    if not rows:
-        raise RuntimeError("No se pudo actualizar el proveedor.")
-    return rows[0]
+# ============================================================
+# CREAR PROVEEDOR
+# ============================================================
+
+def create_provider(name: str, country: str, metadata: dict = None):
+    """
+    Registra un proveedor con país obligatorio y metadatos opcionales.
+    """
+    record = {
+        "name": name,
+        "country": country,
+        "metadata": metadata or {},
+        "created_at": datetime.utcnow().isoformat(),
+    }
+
+    result = table("ca_providers").insert(record).execute()
+    return result[0]["id"]
 
 
-def disable_provider(provider_id: str):
-    table("providers_v2").update({"active": False}).eq("id", provider_id).execute()
+# ============================================================
+# OBTENER PROVEEDOR POR ID
+# ============================================================
+
+def get_provider(provider_id: str):
+    """
+    Devuelve un proveedor concreto por su ID.
+    """
+    return (
+        table("ca_providers")
+        .select("*")
+        .eq("id", provider_id)
+        .single()
+        .execute()
+    )
+
+
+# ============================================================
+# ACTUALIZAR PROVEEDOR
+# ============================================================
+
+def update_provider(provider_id: str, data: dict):
+    """
+    Actualiza campos del proveedor.
+    `data` es un dict con los campos a modificar.
+    """
+    return (
+        table("ca_providers")
+        .update(data)
+        .eq("id", provider_id)
+        .execute()
+    )
+
+
+# ============================================================
+# ELIMINAR PROVEEDOR
+# ============================================================
+
+def delete_provider(provider_id: str):
+    """
+    Eliminación simple del proveedor.
+    """
+    return (
+        table("ca_providers")
+        .delete()
+        .eq("id", provider_id)
+        .execute()
+    )
