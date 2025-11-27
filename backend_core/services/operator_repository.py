@@ -252,4 +252,18 @@ def operator_is_global(operator_id):
     op = get_operator(operator_id)
     if not op:
         return False
-    return bool(op.get("global_access", False))
+    return bool(op.get("global_access", False)
+
+
+def get_operator_global_seed(operator_id: str):
+    """
+    Devuelve la seed global asociada a un operador (si existe).
+    Usado por Engine Monitor.
+    """
+    return (
+        table("ca_operator_seeds")
+        .select("*")
+        .eq("operator_id", operator_id)
+        .single()
+        .execute()
+    )
