@@ -143,6 +143,7 @@ def main():
             "Admin Operators KYC",
             "Admin Engine",
             "Contract Payment Status",
+            "Operator Debug",
         ],
     )
 
