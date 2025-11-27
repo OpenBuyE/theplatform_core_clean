@@ -1,92 +1,91 @@
 # backend_core/services/adjudicator_engine.py
 
-from __future__ import annotations
-
 import hashlib
-from typing import Dict, Any, List
-
+from datetime import datetime
+from backend_core.services.supabase_client import table
 from backend_core.services.audit_repository import log_event
 from backend_core.services.session_repository import (
     get_session_by_id,
-    finish_session,
+    mark_session_finished,
+    get_participants_sorted,
 )
-from backend_core.services.participant_repository import (
-    get_participants_for_session,
-    mark_awarded,
-)
-from backend_core.services.session_engine import session_engine
-from backend_core.services.contract_engine import contract_engine
-from backend_core.services.module_repository import get_module_for_session
+from backend_core.services.operator_repository import get_operator_global_seed
 
 
-class AdjudicatorEngine:
+# ==========================================================================
+# FUNCIONES INTERNAS
+# ==========================================================================
+def _build_input_string(session, num_participants: int, previous_hash: str):
+    return (
+        f"{session['id']}:"
+        f"{session.get('module_id','')}:"
+        f"{session['created_at']}:"
+        f"{num_participants}:"
+        f"{session.get('global_seed','')}:"
+        f"{previous_hash}"
+    )
+
+
+def _calculate_hash(input_string: str):
+    return hashlib.sha256(input_string.encode()).hexdigest()
+
+
+# ==========================================================================
+# API PRINCIPAL — USADA POR Active Sessions y Workers
+# ==========================================================================
+def run_adjudication(session_id: str):
     """
-    Motor de adjudicación determinista simplificado:
-    - No usa todavía tabla de seeds (para no romper nada).
-    - Usa session_id + ids de participantes para construir el hash.
+    Motor determinista:
+    - carga sesión
+    - carga participantes ordenados
+    - genera semilla
+    - calcula índice ganador
+    - registra auditoría
+    - marca sesión como terminada
     """
+    session = get_session_by_id(session_id)
+    if not session:
+        raise Exception(f"Session {session_id} not found")
 
-    def _validate_ready(self, session: Dict[str, Any], participants: List[Dict[str, Any]]):
-        if session["status"] != "active":
-            raise ValueError("La sesión no está activa.")
+    participants = get_participants_sorted(session_id)
+    num = len(participants)
+    if num == 0:
+        raise Exception("No participants found")
 
-        if not participants:
-            raise ValueError("La sesión no tiene participantes.")
+    previous_hash = session.get("previous_chain_hash") or ""
 
-        if session["pax_registered"] < session["capacity"]:
-            raise ValueError("El aforo no está completo.")
+    input_string = _build_input_string(session, num, previous_hash)
+    seed = _calculate_hash(input_string)
 
-    def run_adjudication(self, session_id: str) -> Dict[str, Any]:
-        session = get_session_by_id(session_id)
-        if not session:
-            raise ValueError("Sesión no encontrada.")
+    winner_index = int(seed, 16) % num
+    winner = participants[winner_index]
 
-        participants = get_participants_for_session(session_id)
-
-        # Validaciones básicas
-        self._validate_ready(session, participants)
-
-        # Comprobar módulo (solo módulos deterministas deberían adjudicar)
-        module = get_module_for_session(session_id)
-        if module and module.get("module_status") == "cancelled":
-            raise ValueError("El módulo está cancelado; no se puede adjudicar.")
-
-        # Construir base determinista (sin seed por ahora)
-        base = session_id + "".join(p["id"] for p in participants)
-        digest = hashlib.sha256(base.encode()).hexdigest()
-        index = int(digest, 16) % len(participants)
-
-        winner = participants[index]
-
-        # Marcar adjudicatario
-        mark_awarded(winner["id"])
-
-        # Cerrar sesión
-        finish_session(session_id)
-
-        log_event(
-            "session_adjudicated",
-            session_id=session_id,
-            metadata={
-                "winner_participant_id": winner["id"],
-                "hash": digest,
-                "winner_index": index,
-            },
-        )
-
-        # Lanzar flujo contractual
-        contract_engine.start_contract_flow(session_id)
-
-        # Rolling
-        session_engine.run_rolling_if_needed(session_id)
-
-        return {
+    # ============================================================
+    # Registrar auditoría
+    # ============================================================
+    log_event(
+        event_type="session_adjudicated",
+        details={
             "session_id": session_id,
+            "input_string": input_string,
+            "hash_output": seed,
             "winner_participant_id": winner["id"],
-            "hash": digest,
-            "winner_index": index,
-        }
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+    )
 
+    # ============================================================
+    # Actualizar participante ganador
+    # ============================================================
+    table("session_participants").update({"is_awarded": True}).eq("id", winner["id"]).execute()
 
-# Instancia global
-adjudicator_engine = AdjudicatorEngine()
+    # ============================================================
+    # Cambiar estado de sesión
+    # ============================================================
+    mark_session_finished(session_id)
+
+    return {
+        "winner_participant_id": winner["id"],
+        "hash": seed,
+        "input": input_string,
+    }
