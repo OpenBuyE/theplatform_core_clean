@@ -1,96 +1,118 @@
 # backend_core/services/product_repository_v2.py
 
-from typing import List, Dict, Any, Optional
+from datetime import datetime
 from backend_core.services.supabase_client import table
+from backend_core.services.operator_repository import ensure_country_filter
 
 
-# ============================
-# CATEGORÍAS
-# ============================
+# ============================================================
+# LISTAR PRODUCTOS (V2)
+# ============================================================
 
-def list_categories() -> List[Dict[str, Any]]:
-    rows = table("categorias_v2").select("*").order("created_at", desc=True).execute()
-    return rows or []
-
-
-def create_category(name: str, description: str = "", is_active: bool = True) -> Dict[str, Any]:
-    rows = table("categorias_v2").insert(
-        {
-            "nombre": name,
-            "descripcion": description,
-            "is_active": is_active,
-        }
-    ).execute()
-    if not rows:
-        raise RuntimeError("No se pudo crear la categoría.")
-    return rows[0]
-
-
-def update_category(category_id: str, **fields) -> Dict[str, Any]:
-    rows = table("categorias_v2").update(fields).eq("id", category_id).execute()
-    if not rows:
-        raise RuntimeError("No se pudo actualizar la categoría.")
-    return rows[0]
-
-
-def delete_category(category_id: str):
-    table("categorias_v2").update({"is_active": False}).eq("id", category_id).execute()
-
-
-def get_category_by_id(category_id: str) -> Optional[Dict[str, Any]]:
-    rows = table("categorias_v2").select("*").eq("id", category_id).execute()
-    return rows[0] if rows else None
-
-
-# ============================
-# PROVEEDORES (vía products_v2)
-# ============================
-
-def list_providers_v2() -> List[Dict[str, Any]]:
+def list_products_v2(operator=None):
     """
-    Devuelve todos los proveedores desde providers_v2.
-    (usado por Product Catalog Pro)
+    Lista productos con filtro multi-país.
     """
-    rows = table("providers_v2").select("*").order("created_at", desc=True).execute()
-    return rows or []
+    if operator:
+        field, countries = ensure_country_filter(operator)
+        return (
+            table("products_v2")
+            .select("*")
+            .in_(field, countries)
+            .order("created_at", desc=True)
+            .execute()
+        )
 
-
-def get_provider_by_id(provider_id: str) -> Optional[Dict[str, Any]]:
-    rows = table("providers_v2").select("*").eq("id", provider_id).execute()
-    return rows[0] if rows else None
-
-
-# ============================
-# PRODUCTOS
-# ============================
-
-def list_products_v2() -> List[Dict[str, Any]]:
-    rows = (
+    return (
         table("products_v2")
         .select("*")
         .order("created_at", desc=True)
         .execute()
     )
-    return rows or []
 
 
-def create_product(payload: Dict[str, Any]) -> Dict[str, Any]:
-    rows = table("products_v2").insert(payload).execute()
-    if not rows:
-        raise RuntimeError("No se pudo crear el producto.")
-    return rows[0]
+# ============================================================
+# OBTENER PRODUCTO
+# ============================================================
+
+def get_product_v2(product_id: str):
+    result = (
+        table("products_v2")
+        .select("*")
+        .eq("id", product_id)
+        .single()
+        .execute()
+    )
+    return result
 
 
-def get_product_v2(product_id: str) -> Optional[Dict[str, Any]]:
-    rows = table("products_v2").select("*").eq("id", product_id).execute()
-    return rows[0] if rows else None
+# ============================================================
+# CREAR PRODUCTO
+# ============================================================
+
+def create_product_v2(data: dict):
+    data["created_at"] = datetime.utcnow().isoformat()
+    res = table("products_v2").insert(data).execute()
+    return res[0] if res else None
 
 
-def filter_products(filters: Dict[str, Any]) -> List[Dict[str, Any]]:
-    q = table("products_v2").select("*")
-    for col, value in filters.items():
-        if value is None:
-            continue
-        q = q.eq(col, value)
-    rows = q.execute()
-    return rows or []
+# ============================================================
+# ACTUALIZAR PRODUCTO
+# ============================================================
+
+def update_product_v2(product_id: str, data: dict):
+    data["updated_at"] = datetime.utcnow().isoformat()
+    res = (
+        table("products_v2")
+        .update(data)
+        .eq("id", product_id)
+        .execute()
+    )
+    return res[0] if res else None
+
+
+# ============================================================
+# ELIMINAR PRODUCTO
+# ============================================================
+
+def delete_product_v2(product_id: str):
+    return (
+        table("products_v2")
+        .delete()
+        .eq("id", product_id)
+        .execute()
+    )
+
+
+# ============================================================
+# PROVEEDORES (compatibilidad)
+# ============================================================
+
+def list_providers_v2():
+    """
+    Alias para compatibilidad con vistas antiguas.
+    """
+    return (
+        table("providers_v2")
+        .select("*")
+        .order("name", asc=True)
+        .execute()
+    )
+
+
+# ============================================================
+# COMPATIBILIDAD LEGACY
+# ============================================================
+
+def list_products():
+    """
+    Alias legacy usado por vistas antiguas.
+    """
+    return list_products_v2()
+
+
+def get_product(product_id: str):
+    """
+    Alias legacy (Engine Monitor y Product Details Pro lo usan).
+    """
+    return get_product_v2(product_id)
