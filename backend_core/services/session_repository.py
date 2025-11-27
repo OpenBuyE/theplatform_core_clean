@@ -1,182 +1,176 @@
-# backend_core/services/session_repository.py
-
+import datetime
 from backend_core.services.supabase_client import table
-from datetime import datetime, timedelta
-
-# ======================================================================
-# 📌 CREAR SESIÓN
-# ======================================================================
-
-def create_session(data: dict):
-    return table("sessions").insert(data).execute()
-
-
-def create_parked_session(product_id: str, capacity: int):
-    data = {
-        "status": "parked",
-        "product_id": product_id,
-        "capacity": capacity,
-        "pax_registered": 0,
-        "created_at": datetime.utcnow().isoformat(),
-    }
-    result = create_session(data)
-    return result[0]["id"] if result else None
 
 
 # ======================================================================
-# 📌 SESIONES PARKED / ACTIVE
+# 📌 Básico — Obtener sesiones por estado
 # ======================================================================
 
-def get_parked_sessions():
-    return (
-        table("sessions")
-        .select("*")
-        .eq("status", "parked")
-        .order("created_at", desc=True)
-        .execute()
-    )
+def get_sessions(status: str = None):
+    q = table("ca_sessions").select("*")
 
+    if status:
+        q = q.eq("status", status)
 
-def get_active_sessions():
-    return (
-        table("sessions")
-        .select("*")
-        .eq("status", "active")
-        .order("activated_at", desc=True)
-        .execute()
-    )
-
-
-def get_sessions():
-    return (
-        table("sessions")
-        .select("*")
-        .order("created_at", desc=True)
-        .execute()
-    )
+    result = q.execute()
+    return result if isinstance(result, list) else result.get("data", [])
 
 
 def get_session_by_id(session_id: str):
-    return (
-        table("sessions")
+    result = (
+        table("ca_sessions")
         .select("*")
         .eq("id", session_id)
-        .single()
+        .limit(1)
         .execute()
     )
-
-
-# ======================================================================
-# 📌 ACTIVAR / FINALIZAR SESIÓN
-# ======================================================================
-
-def activate_session(session_id: str):
-    return (
-        table("sessions")
-        .update({
-            "status": "active",
-            "activated_at": datetime.utcnow().isoformat(),
-        })
-        .eq("id", session_id)
-        .execute()
-    )
-
-
-def finish_session(session_id: str, winner_participant_id: str = None):
-    return (
-        table("sessions")
-        .update({
-            "status": "finished",
-            "winner_participant_id": winner_participant_id,
-            "finished_at": datetime.utcnow().isoformat(),
-        })
-        .eq("id", session_id)
-        .execute()
-    )
-
-
-# ======================================================================
-# 📌 PARTICIPANTES
-# ======================================================================
-
-def get_participants_for_session(session_id: str):
-    return (
-        table("participants")
-        .select("*")
-        .eq("session_id", session_id)
-        .order("created_at", asc=True)
-        .execute()
-    )
-
-
-# ======================================================================
-# 📌 SERIES
-# ======================================================================
-
-def get_session_series(series_id: str):
-    return (
-        table("session_series")
-        .select("*")
-        .eq("id", series_id)
-        .single()
-        .execute()
-    )
-
-
-def get_sessions_by_series(series_id: str):
-    return (
-        table("sessions")
-        .select("*")
-        .eq("series_id", series_id)
-        .order("created_at", desc=True)
-        .execute()
-    )
-
-
-# ======================================================================
-# 📌 HISTÓRICO / EXPIRADAS
-# ======================================================================
-
-def get_expired_sessions():
-    expiry = datetime.utcnow() - timedelta(days=5)
-    return (
-        table("sessions")
-        .select("*")
-        .eq("status", "parked")
-        .lte("created_at", expiry.isoformat())
-        .execute()
-    )
+    if not result:
+        return None
+    return result[0] if isinstance(result, list) else result.get("data", [None])[0]
 
 
 def get_finished_sessions():
-    return (
-        table("sessions")
+    result = (
+        table("ca_sessions")
         .select("*")
         .eq("status", "finished")
-        .order("finished_at", desc=True)
         .execute()
     )
+    return result if isinstance(result, list) else result.get("data", [])
+
+
+def get_expired_sessions():
+    result = (
+        table("ca_sessions")
+        .select("*")
+        .eq("status", "expired")
+        .execute()
+    )
+    return result if isinstance(result, list) else result.get("data", [])
+
+
+def get_sessions_by_series(series_id: str):
+    result = (
+        table("ca_sessions")
+        .select("*")
+        .eq("series_id", series_id)
+        .execute()
+    )
+    return result if isinstance(result, list) else result.get("data", [])
+
 
 
 # ======================================================================
-# 📌 LISTA COMPLETA (Engine Monitor)
+# 📌 Crear / Actualizar sesiones
+# ======================================================================
+
+def create_session(data: dict):
+    result = table("ca_sessions").insert(data).execute()
+    return result if isinstance(result, list) else result.get("data", [])
+
+
+def update_session(session_id: str, updates: dict):
+    result = (
+        table("ca_sessions")
+        .update(updates)
+        .eq("id", session_id)
+        .execute()
+    )
+    return result if isinstance(result, list) else result.get("data", [])
+
+
+def finish_session(session_id: str):
+    return update_session(session_id, {"status": "finished"})
+
+
+def mark_session_finished(session_id: str):
+    return update_session(session_id, {"status": "finished"})
+
+
+# ======================================================================
+# 📌 Participantes de una sesión
+# ======================================================================
+
+def get_participants_for_session(session_id: str):
+    result = (
+        table("ca_session_participants")
+        .select("*")
+        .eq("session_id", session_id)
+        .execute()
+    )
+    return result if isinstance(result, list) else result.get("data", [])
+
+
+# ANTIGUO NOMBRE USADO POR ALGUNAS VISTAS
+def get_participants_sorted(session_id: str):
+    data = get_participants_for_session(session_id)
+    if not data:
+        return []
+
+    rows = data if isinstance(data, list) else data.get("data", [])
+
+    try:
+        return sorted(rows, key=lambda x: x.get("created_at", ""))
+    except Exception:
+        return rows
+
+
+
+# ======================================================================
+# 📌 Engine / Monitor
 # ======================================================================
 
 def get_all_sessions():
-    return (
-        table("sessions")
+    result = table("ca_sessions").select("*").execute()
+    return result if isinstance(result, list) else result.get("data", [])
+
+
+
+# ======================================================================
+# 📌 Series (Admin Series / Chains)
+# ======================================================================
+
+def get_session_series():
+    result = table("ca_series").select("*").execute()
+    return result if isinstance(result, list) else result.get("data", [])
+
+
+
+# ======================================================================
+# 📌 Limpieza de sesiones expiradas
+# ======================================================================
+
+def auto_expire_sessions():
+    """
+    Marca como 'expired' las sesiones cuyo expiry_date ya pasó.
+    """
+    now = datetime.datetime.utcnow().isoformat()
+
+    sessions = (
+        table("ca_sessions")
         .select("*")
-        .order("created_at", desc=True)
+        .lte("expiry_date", now)
+        .eq("status", "active")
         .execute()
     )
 
+    rows = sessions if isinstance(sessions, list) else sessions.get("data", [])
+
+    for s in rows:
+        update_session(s["id"], {"status": "expired"})
+
+    return len(rows)
+
+
 
 # ======================================================================
-# 📌 COMPATIBILIDAD LEGACY (muy importante)
+# 📌 Funciones usadas por vistas legacy
 # ======================================================================
 
-def mark_session_finished(session_id: str, winner_participant_id: str = None):
+def get_operator_allowed_countries(operator_id: str):
     """
-    Alias retrocompatible para vistas antiguas.
+    Compat: necesario porque algunas vistas antiguas intentan importarla aquí.
+    Ahora esto existe realmente en operator_repository, pero lo repetimos.
     """
-    return finish_session(session_id, winner_participant_id)
+    from backend_core.services.operator_repository import get_operator_allowed_countries
+    return get_operator_allowed_countries(operator_id)
