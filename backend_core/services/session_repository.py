@@ -18,18 +18,13 @@ def _extract(result):
 # =====================================================================
 
 def create_session(data: dict):
-    """
-    Crea una sesión en ca_sessions.
-    data debe incluir product_id, capacity, country, module_id opcional…
-    """
+    """Crea una sesión en ca_sessions."""
     result = table("ca_sessions").insert(data).execute()
     return _extract(result)
 
 
 def update_session(session_id: str, fields: dict):
-    """
-    Actualiza cualquier campo de una sesión.
-    """
+    """Actualiza cualquier campo de una sesión."""
     result = (
         table("ca_sessions")
         .update(fields)
@@ -51,9 +46,7 @@ def get_session_by_id(session_id: str):
 
 
 def get_sessions():
-    """
-    Alias legacy para obtener todas las sesiones.
-    """
+    """Alias legacy para obtener todas las sesiones."""
     result = table("ca_sessions").select("*").execute()
     return _extract(result)
 
@@ -63,9 +56,7 @@ def get_sessions():
 # =====================================================================
 
 def get_active_sessions():
-    """
-    Devuelve sesiones activas.
-    """
+    """Devuelve sesiones activas."""
     result = (
         table("ca_sessions")
         .select("*")
@@ -86,9 +77,7 @@ def get_finished_sessions():
 
 
 def get_expired_sessions():
-    """
-    Sesiones cuyo expiry_at ya pasó.
-    """
+    """Sesiones cuyo expiry_at ya pasó."""
     now = datetime.datetime.utcnow().isoformat()
     result = (
         table("ca_sessions")
@@ -99,28 +88,33 @@ def get_expired_sessions():
     return _extract(result)
 
 
+def get_parked_sessions():
+    """Sesiones aparcadas (legacy)."""
+    result = (
+        table("ca_sessions")
+        .select("*")
+        .eq("status", "parked")
+        .execute()
+    )
+    return _extract(result)
+
+
 # =====================================================================
 # 🔹 ACTUALIZACIÓN DE ESTADO
 # =====================================================================
 
 def finish_session(session_id: str):
-    """
-    Cambia estado a 'finished'
-    """
+    """Cambia estado a 'finished'."""
     return update_session(session_id, {"status": "finished"})
 
 
 def mark_session_finished(session_id: str):
-    """
-    Alias legacy
-    """
+    """Alias legacy."""
     return finish_session(session_id)
 
 
 def activate_session(session_id: str):
-    """
-    Cambia estado a 'active' (legacy)
-    """
+    """Cambia estado a 'active' (legacy)."""
     return update_session(session_id, {"status": "active"})
 
 
@@ -139,9 +133,7 @@ def get_participants_for_session(session_id: str):
 
 
 def get_participants_sorted(session_id: str):
-    """
-    Usado por el adjudicator antiguo.
-    """
+    """Usado por adjudicación antigua."""
     result = (
         table("ca_participants")
         .select("*")
@@ -153,7 +145,7 @@ def get_participants_sorted(session_id: str):
 
 
 # =====================================================================
-# 🔹 SERIES (Cadenas de sesiones consecutivas)
+# 🔹 SERIES
 # =====================================================================
 
 def get_sessions_by_series(series_id: str):
@@ -168,16 +160,10 @@ def get_sessions_by_series(series_id: str):
 
 
 def get_session_series(series_id: str):
-    """
-    Alias legacy para series.
-    """
     return get_sessions_by_series(series_id)
 
 
 def get_next_session_in_series(series_id: str, current_session_id: str):
-    """
-    Devuelve la siguiente sesión en la serie.
-    """
     series = get_sessions_by_series(series_id)
     ids = [s["id"] for s in series]
 
@@ -191,12 +177,9 @@ def get_next_session_in_series(series_id: str, current_session_id: str):
 
 
 # =====================================================================
-# 🔹 LISTADO GLOBAL — ENGINE MONITOR
+# 🔹 LISTADO GLOBAL (ENGINE MONITOR)
 # =====================================================================
 
 def get_all_sessions():
-    """
-    Usado por Engine Monitor.
-    """
     result = table("ca_sessions").select("*").execute()
     return _extract(result)
