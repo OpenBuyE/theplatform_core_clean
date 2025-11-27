@@ -2,7 +2,6 @@
 
 from backend_core.services.supabase_client import table
 
-
 # ======================================================
 # 📌 LISTAR TODOS LOS MÓDULOS DEL SISTEMA
 # ======================================================
@@ -17,7 +16,7 @@ def list_all_modules():
 
 
 # ======================================================
-# 📌 ASIGNAR MÓDULO A SESIÓN
+# 📌 ASIGNAR MÓDULO A SESIÓN (alias moderno)
 # ======================================================
 
 def assign_module_to_session(session_id: str, module_id: str):
@@ -29,6 +28,11 @@ def assign_module_to_session(session_id: str, module_id: str):
         })
         .execute()
     )
+
+
+# 🔄 COMPATIBILIDAD: nombre antiguo usado por algunas vistas
+def assign_module(session_id: str, module_id: str):
+    return assign_module_to_session(session_id, module_id)
 
 
 # ======================================================
@@ -47,7 +51,7 @@ def get_module_for_session(session_id: str):
 
 
 # ======================================================
-# 📌 LISTAR SERIES (Session Chains)
+# 📌 SERIES (Session Chains)
 # ======================================================
 
 def list_session_series():
@@ -59,10 +63,6 @@ def list_session_series():
     )
 
 
-# ======================================================
-# 📌 LISTAR MÓDULOS ASIGNADOS A UNA SERIE
-# ======================================================
-
 def list_session_modules(series_id: str):
     return (
         table("session_series_modules")
@@ -71,3 +71,8 @@ def list_session_modules(series_id: str):
         .order("order_index", desc=False)
         .execute()
     )
+
+
+# 🔄 COMPATIBILIDAD: función que esperan algunas vistas
+def create_session_series(data: dict):
+    return table("session_series").insert(data).execute()
