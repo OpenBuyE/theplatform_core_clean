@@ -14,34 +14,49 @@ def normalize_email(e: str) -> str:
 
 
 # ============================================================
+# FUNCIÓN PARA LEER SIEMPRE result.data
+# ============================================================
+
+def safe_execute(query):
+    """
+    Garantiza que siempre devolvemos una LISTA de filas.
+    Supabase en Streamlit Cloud devuelve objects con .data.
+    """
+    try:
+        result = query.execute()
+    except Exception as e:
+        st.error(f"❌ Error ejecutando consulta Supabase: {e}")
+        return []
+
+    # Si tiene .data → usarla
+    if hasattr(result, "data"):
+        return result.data or []
+
+    # Si es iterable
+    if isinstance(result, list):
+        return result
+
+    # Fallback
+    return []
+
+
+# ============================================================
 # AUTENTICACIÓN ROBUSTA
 # ============================================================
 
 def authenticate_operator(email: str, password: str):
-    """
-    Autenticación tolerante:
-    - email en minúsculas
-    - soporta active como boolean o como texto "true"
-    - debug opcional si no encuentra coincidencias
-    """
-
     email_norm = normalize_email(email)
 
-    try:
-        # Obtener todos los operadores activos (boolean OR string)
-        result = (
-            table("ca_operators")
-            .select("*")
-            .execute()
-        )
-    except Exception as e:
-        st.error(f"❌ Error conectando con la base de datos: {e}")
-        return None
+    # Leer todos los operadores
+    result = safe_execute(
+        table("ca_operators").select("*")
+    )
 
+    # Nada en tabla
     if not result:
         return None
 
-    # Buscar coincidencias manualmente para evitar errores de formato
+    # Buscar coincidencia manual
     for op in result:
         email_db = normalize_email(op.get("email", ""))
         active_raw = op.get("active", True)
@@ -62,7 +77,7 @@ def authenticate_operator(email: str, password: str):
 
 
 # ============================================================
-# RENDER DE PANTALLA
+# LOGIN UI
 # ============================================================
 
 def render_operator_login():
@@ -81,11 +96,12 @@ def render_operator_login():
             st.session_state["email"] = operator["email"]
             st.session_state["full_name"] = operator.get("full_name", "")
             st.session_state["role"] = operator.get("role", "operator")
-            st.session_state["allowed_countries"] = operator.get("allowed_countries", [])
+            st.session_state["allowed_countries"] = operator.get("allowed_countries", ["ES"])
             st.session_state["global_access"] = operator.get("global_access", False)
 
             st.success("Acceso correcto. Cargando panel…")
             st.experimental_rerun()
+
         else:
             st.error("❌ Credenciales incorrectas o usuario no activo.")
 
