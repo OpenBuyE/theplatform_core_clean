@@ -153,3 +153,37 @@ def update_operator(operator_id: str, data: dict):
         return True
     except Exception:
         return False
+
+
+# ---------------------------------------------------------------------
+# CREAR OPERADOR NUEVO
+# ---------------------------------------------------------------------
+def create_operator(data: dict):
+    """
+    Crea un nuevo operador en ca_operators.
+    Si trae password en texto plano, se hashea automáticamente.
+    """
+    try:
+        new_data = data.copy()
+
+        # Hash automático si viene un password normal
+        if "password" in new_data and new_data["password"]:
+            raw = new_data["password"].encode("utf-8")
+            hashed = bcrypt.hashpw(raw, bcrypt.gensalt()).decode("utf-8")
+            new_data["password_hash"] = hashed
+            del new_data["password"]
+
+        # Valores por defecto
+        if "active" not in new_data:
+            new_data["active"] = True
+
+        if "allowed_countries" not in new_data:
+            new_data["allowed_countries"] = []
+
+        result = supabase.table("ca_operators").insert(new_data).execute()
+
+        return result.data[0] if result and result.data else None
+
+    except Exception as e:
+        print("Error create_operator:", e)
+        return None
