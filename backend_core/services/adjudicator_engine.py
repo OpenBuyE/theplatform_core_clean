@@ -25,11 +25,11 @@ def get_seed_for_session(session_id: str):
             .maybe_single()
             .execute()
         )
+
         seed = result.get("seed")
         if seed:
             return seed
 
-        # Semilla legacy: hash SHA256 de created_at
         created = result.get("created_at", "")
         return hashlib.sha256(created.encode()).hexdigest()
 
@@ -43,8 +43,7 @@ def get_seed_for_session(session_id: str):
 
 def get_engine_state():
     """
-    Devuelve un snapshot del estado del motor.
-    usado por Engine Monitor.
+    Snapshot del estado del motor.
     """
     now = datetime.datetime.utcnow().isoformat()
     return {
@@ -56,7 +55,28 @@ def get_engine_state():
 
 
 # =====================================================
-# 🔹 Motor determinista principal (versión estable)
+# 🔹 Legacy: get_adjudication_record (solicidad por Engine Monitor)
+# =====================================================
+
+def get_adjudication_record(session_id: str):
+    """
+    Devuelve un registro compatible con versiones antiguas del Engine Monitor.
+    No afecta al motor moderno.
+    """
+
+    seed = get_seed_for_session(session_id)
+
+    return {
+        "session_id": session_id,
+        "seed": seed,
+        "algorithm": "deterministic_v1",
+        "status": "completed_or_pending",
+        "details": "legacy compatibility record",
+    }
+
+
+# =====================================================
+# 🔹 Motor determinista principal
 # =====================================================
 
 def run_adjudication(session_id: str):
@@ -65,12 +85,10 @@ def run_adjudication(session_id: str):
     Selección = hash(seed + participant_index) más bajo.
     """
 
-    # 1. Participantes ordenados por created_at
     participants = get_participants_sorted(session_id)
     if not participants:
         raise Exception("No hay participantes en la sesión.")
 
-    # 2. Semilla
     seed = get_seed_for_session(session_id)
     if not seed:
         raise Exception("No fue posible obtener la seed.")
@@ -81,20 +99,16 @@ def run_adjudication(session_id: str):
         digest = hashlib.sha256(base.encode()).hexdigest()
         scores.append((digest, p))
 
-    # 3. Ganador: menor hash lexicográfico
     scores.sort(key=lambda x: x[0])
     winner = scores[0][1]
 
-    # 4. Marcar ganador en ca_participants
     table("ca_participants")\
         .update({"is_awarded": True})\
         .eq("id", winner["id"])\
         .execute()
 
-    # 5. Marcar sesión como finalizada
     finish_session(session_id)
 
-    # 6. Log en auditoría
     log_event(
         "session_adjudicated",
         session_id=session_id,
