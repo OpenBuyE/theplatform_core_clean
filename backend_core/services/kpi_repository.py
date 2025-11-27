@@ -20,88 +20,78 @@ def _count(q):
 
 
 # ==========================================================================
-# MODERN KPI FUNCTIONS (usadas por la arquitectura actual)
+# MODERN KPI FUNCTIONS (nueva arquitectura)
 # ==========================================================================
 def sessions_active(operator_id: str, country: str):
     c = ensure_country_filter(operator_id, country)
     if not c:
         return 0
-
-    q = (
+    return _count(
         table("ca_sessions")
         .select("id")
         .eq("country", c)
         .eq("status", "active")
     )
-    return _count(q)
 
 
 def sessions_parked(operator_id: str, country: str):
     c = ensure_country_filter(operator_id, country)
     if not c:
         return 0
-
-    q = (
+    return _count(
         table("ca_sessions")
         .select("id")
         .eq("country", c)
         .eq("status", "parked")
     )
-    return _count(q)
 
 
 def sessions_finished(operator_id: str, country: str):
     c = ensure_country_filter(operator_id, country)
     if not c:
         return 0
-
-    q = (
+    return _count(
         table("ca_sessions")
         .select("id")
         .eq("country", c)
         .eq("status", "finished")
     )
-    return _count(q)
 
 
 def sessions_expired(operator_id: str, country: str):
     c = ensure_country_filter(operator_id, country)
     if not c:
         return 0
-
-    q = (
+    return _count(
         table("ca_sessions")
         .select("id")
         .eq("country", c)
         .eq("status", "expired")
     )
-    return _count(q)
 
 
-def get_kpi_wallets_total(operator_id: str, country: str):
-    """
-    Placeholder profesional para evitar fallos de importación.
-    """
+def providers_total(operator_id: str, country: str):
     c = ensure_country_filter(operator_id, country)
     if not c:
         return 0
-    return 0
+    return _count(
+        table("providers_v2")
+        .select("id")
+        .eq("country", c)
+    )
 
 
-def get_kpi_wallets_pending(operator_id: str, country: str):
-    c = ensure_country_filter(operator_id, country)
-    if not c:
-        return 0
+def wallets_total(operator_id: str, country: str):
+    """
+    Placeholder — no existe tabla wallets implementada todavía.
+    """
     return 0
 
 
 # ==========================================================================
-# LEGACY WRAPPERS — Para compatibilidad con vistas antiguas
+# LEGACY WRAPPERS — compatibilidad total con vistas antiguas
 # ==========================================================================
 def get_kpi_sessions_active(operator_id: str, country: str):
-    """
-    Wrapper para compatibilidad con versiones antiguas del dashboard.
-    """
     return sessions_active(operator_id, country)
 
 
@@ -117,8 +107,17 @@ def get_kpi_sessions_expired(operator_id: str, country: str):
     return sessions_expired(operator_id, country)
 
 
+def get_kpi_wallets_total(operator_id: str, country: str):
+    return wallets_total(operator_id, country)
+
+
+def get_kpi_wallets_pending(operator_id: str, country: str):
+    return 0
+
+
 def wallet_deposit_ok(operator_id: str, country: str):
-    """
-    Wrapper legacy.
-    """
-    return get_kpi_wallets_total(operator_id, country)
+    return wallets_total(operator_id, country)
+
+
+def get_kpi_providers_total(operator_id: str, country: str):
+    return providers_total(operator_id, country)
