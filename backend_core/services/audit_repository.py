@@ -1,85 +1,37 @@
 # backend_core/services/audit_repository.py
 
-import uuid
 from datetime import datetime
 from backend_core.services.supabase_client import table
+from backend_core.services.operator_repository import ensure_country_filter
 
 
-# ======================================================================
-# REGISTRO DE AUDITORÍA
-# ======================================================================
+# ============================================================
+# REGISTRO DE EVENTOS (LOG EVENT)
+# ============================================================
 
-def log_event(event_type: str, session_id: str = None, details: dict = None, operator_id: str = None):
+def log_event(event_type, session_id=None, operator_id=None, metadata=None):
     """
-    Guarda un evento en la tabla ca_audit_logs.
-    Compatible con TODAS las vistas que llaman log_event().
+    Crea un registro de auditoría.
+    Compatible con todas las versiones previas.
     """
-
-    payload = {
-        "id": str(uuid.uuid4()),
+    record = {
         "event_type": event_type,
         "session_id": session_id,
         "operator_id": operator_id,
-        "details": details or {},
+        "metadata": metadata or {},
         "created_at": datetime.utcnow().isoformat(),
     }
 
-    table("ca_audit_logs").insert(payload).execute()
-
-    return True
-
-
-# ======================================================================
-# OBTENER LOGS POR OPERADOR
-# ======================================================================
-
-def get_all_logs_for_operator(operator_id: str):
-    """
-    Devuelve todos los eventos de auditoría generados por un operador.
-    Usado por Admin Logs.
-    """
-    result = (
-        table("ca_audit_logs")
-        .select("*")
-        .eq("operator_id", operator_id)
-        .order("created_at", desc=True)
-        .execute()
-    )
-
-    return result or []
+    res = table("ca_audit_logs").insert(record).execute()
+    return res[0] if res else None
 
 
-# ======================================================================
-# LOGS FILTRADOS POR SESIÓN
-# ======================================================================
+# ============================================================
+# OBTENER TODOS LOS LOGS (ADMIN MASTER)
+# ============================================================
 
-def get_adjudication_log(session_id: str):
-    """
-    Obtiene logs de adjudicación para una sesión.
-    Necesario para Session History, Session Chains, etc.
-    """
-    result = (
-        table("ca_audit_logs")
-        .select("*")
-        .eq("session_id", session_id)
-        .order("created_at", desc=True)
-        .execute()
-    )
-
-    return result or []
-
-
-# ======================================================================
-# TODOS LOS LOGS (ADMIN MASTER)
-# ======================================================================
-
-def get_all_logs(limit: int = 200):
-    """
-    Devuelve los logs más recientes del sistema.
-    Usado por Engine Monitor y Admin Engine.
-    """
-
-    result = (
+def get_all_logs(limit=500):
+    return (
         table("ca_audit_logs")
         .select("*")
         .order("created_at", desc=True)
@@ -87,4 +39,79 @@ def get_all_logs(limit: int = 200):
         .execute()
     )
 
-    return result or []
+
+# ============================================================
+# LOGS PARA OPERADOR (FILTRADO POR PAÍS)
+# ============================================================
+
+def get_all_logs_for_operator(operator):
+    """
+    Devuelve logs filtrados por países permitidos para el operador.
+    """
+    field, allowed = ensure_country_filter(operator)
+
+    return (
+        table("ca_audit_logs")
+        .select("*")
+        .in_(field, allowed)
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+
+# ============================================================
+# DETALLES DE UN LOG (LEGACY)
+# ============================================================
+
+def get_log_details(log_id):
+    """
+    Devuelve el contenido completo de un log.
+    Necesario para compatibilidad con pantallas antiguas.
+    """
+    return (
+        table("ca_audit_logs")
+        .select("*")
+        .eq("id", log_id)
+        .single()
+        .execute()
+    )
+
+
+# ============================================================
+# LOGS POR SESIÓN
+# ============================================================
+
+def get_logs_for_session(session_id):
+    return (
+        table("ca_audit_logs")
+        .select("*")
+        .eq("session_id", session_id)
+        .order("created_at", asc=True)
+        .execute()
+    )
+
+
+# ============================================================
+# LOGS POR TIPO DE EVENTO
+# ============================================================
+
+def get_logs_by_event_type(event_type):
+    return (
+        table("ca_audit_logs")
+        .select("*")
+        .eq("event_type", event_type)
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+
+# ============================================================
+# CONTAR LOGS (KPIs)
+# ============================================================
+
+def count_logs():
+    return (
+        table("ca_audit_logs")
+        .select("id", count="exact")
+        .execute()
+    )
