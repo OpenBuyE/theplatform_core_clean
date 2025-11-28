@@ -7,5 +7,8 @@ storage3==0.7.2
 supafunc==0.3.4
 bcrypt==3.2.2
 cffi==1.17.1
-markdown-it-py
-rich
+markdown-it-py==4.0.0
+rich==14.2.0
+mdurl==0.1.2
+pygments==2.19.2
+# dummy-line-to-prevent-streamlit-bug
