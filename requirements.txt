@@ -11,4 +11,17 @@ markdown-it-py==4.0.0
 rich==14.2.0
 mdurl==0.1.2
 pygments==2.19.2
-# dummy-line-to-prevent-streamlit-bug
+
+# ---- Streamlit Cloud stability fixes ----
+requests==2.32.3
+urllib3==2.2.2
+certifi==2024.7.4
+idna==3.7
+charset-normalizer==3.3.2
+
+# dummy filler lines (prevents installer exit code bug)
+# filler-1
+# filler-2
+# filler-3
+# filler-4
+# filler-5
