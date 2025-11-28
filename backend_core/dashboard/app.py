@@ -1,13 +1,14 @@
 import streamlit as st
 
 # =========================================================
-# IMPORTS DEL LAYOUT MINIMAL
+# IMPORTS DEL LAYOUT MINIMAL (SIN CSS)
 # =========================================================
 from backend_core.dashboard.ui.layout import (
     setup_page,
     render_header,
     render_sidebar,
 )
+
 
 # =========================================================
 # DIAGNÓSTICO DE IMPORTS
@@ -22,7 +23,7 @@ def diagnostic_imports():
         "Operator Manager Pro": ("operator_manager_pro", "render_operator_manager_pro"),
         "Parked Sessions": ("park_sessions", "render_park_sessions"),
         "Active Sessions": ("active_sessions", "render_active_sessions"),
-        "Session Chains": ("chains", "render_chains"),
+        "Session Chains": ("chains", "render_session_chains"),
         "Session History": ("history_sessions", "render_history_sessions"),
         "Audit Logs": ("audit_logs", "render_audit_logs"),
         "Product Catalog Pro": ("product_catalog_pro", "render_product_catalog_pro"),
@@ -38,7 +39,6 @@ def diagnostic_imports():
         "Admin Operators KYC": ("admin_operators_kyc", "render_admin_operators_kyc"),
         "Admin Engine": ("admin_engine", "render_admin_engine"),
         "Contract Payment Status": ("contract_payment_status", "render_contract_payment_status"),
-        "Operator Debug": ("operator_debug", "render_operator_debug"),
     }
 
     for label, (module_name, func_name) in views.items():
@@ -50,14 +50,19 @@ def diagnostic_imports():
 
 
 # =========================================================
-# ROUTING
+# ROUTER PRINCIPAL — LLAMA A VISTAS
 # =========================================================
 def render_page(page: str):
+    """
+    Router estable. Si una vista falla al importar o ejecutar,
+    la app NO se cae.
+    """
+
     def safe_import(module_name, func_name):
         try:
             module = __import__(f"backend_core.dashboard.views.{module_name}", fromlist=[func_name])
             return getattr(module, func_name)
-        except Exception:
+        except:
             return None
 
     routes = {
@@ -67,7 +72,7 @@ def render_page(page: str):
         "Operator Manager Pro": safe_import("operator_manager_pro", "render_operator_manager_pro"),
         "Parked Sessions": safe_import("park_sessions", "render_park_sessions"),
         "Active Sessions": safe_import("active_sessions", "render_active_sessions"),
-        "Session Chains": safe_import("chains", "render_chains"),
+        "Session Chains": safe_import("chains", "render_session_chains"),
         "Session History": safe_import("history_sessions", "render_history_sessions"),
         "Audit Logs": safe_import("audit_logs", "render_audit_logs"),
         "Product Catalog Pro": safe_import("product_catalog_pro", "render_product_catalog_pro"),
@@ -83,7 +88,6 @@ def render_page(page: str):
         "Admin Operators KYC": safe_import("admin_operators_kyc", "render_admin_operators_kyc"),
         "Admin Engine": safe_import("admin_engine", "render_admin_engine"),
         "Contract Payment Status": safe_import("contract_payment_status", "render_contract_payment_status"),
-        "Operator Debug": safe_import("operator_debug", "render_operator_debug"),
     }
 
     render_function = routes.get(page)
@@ -139,21 +143,20 @@ def main():
             "Admin Operators KYC",
             "Admin Engine",
             "Contract Payment Status",
-            "Operator Debug",
-        ]
+        ],
     )
 
+    # Protege todo excepto el login
     if page != "Operator Login" and "operator_id" not in st.session_state:
-        from backend_core.dashboard.views.operator_login import render_operator_login
-        st.warning("Debe iniciar sesión.")
-        render_operator_login()
+        st.warning("Debe iniciar sesión en 'Operator Login'.")
+        render_page("Operator Login")
         return
 
     render_page(page)
 
 
 # =========================================================
-# RUN
+# EJECUCIÓN DIRECTA
 # =========================================================
 if __name__ == "__main__":
     main()
