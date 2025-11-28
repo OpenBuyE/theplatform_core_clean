@@ -1,101 +1,132 @@
-import bcrypt
-from backend_core.services.db import supabase
+# backend_core/services/operator_repository.py
 
-# ============================================================
-#  OPERATORS REPOSITORY (VERSIÓN ESTABLE Y COMPATIBLE)
-# ============================================================
+from backend_core.services.supabase_client import table
+
+
+# ===============================================================
+# 📌 LISTAR OPERADORES
+# ===============================================================
 
 def list_operators():
-    """Devuelve todos los operadores."""
-    result = supabase.table("operators").select("*").execute()
-    return result.data if result.data else []
-
-
-def get_operator_by_email(email: str):
-    """Obtiene un operador por su email (GlobalAdmin o normal)."""
-    result = supabase.table("operators").select("*").eq("email", email).limit(1).execute()
-    if result.data:
-        return result.data[0]
-    return None
-
-
-def get_operator_by_id(operator_id: str):
-    """Obtiene un operador por ID."""
-    result = supabase.table("operators").select("*").eq("id", operator_id).limit(1).execute()
-    if result.data:
-        return result.data[0]
-    return None
-
-
-def create_operator(email: str, password: str, role: str = "operator"):
-    """Crea un nuevo operador."""
-    password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-    data = {
-        "email": email,
-        "password_hash": password_hash,
-        "role": role,
-        "active": True,
-        "allowed_countries": ["ES"]
-    }
-    supabase.table("operators").insert(data).execute()
-    return True
-
-
-def verify_operator_credentials(email: str, password: str):
-    """Verifica credenciales del login."""
-    operator = get_operator_by_email(email)
-    if not operator:
-        return None
-
-    if not operator.get("active", False):
-        return None
-
-    stored_hash = operator.get("password_hash")
-    if not stored_hash:
-        return None
-
-    try:
-        if bcrypt.checkpw(password.encode(), stored_hash.encode()):
-            return operator
-        return None
-    except Exception:
-        return None
-
-
-def list_operator_kyc_logs(operator_id: str):
-    """Devuelve los logs KYC del operador."""
-    result = (
-        supabase.table("operator_kyc_logs")
+    return (
+        table("ca_operators")
         .select("*")
-        .eq("operator_id", operator_id)
+        .order("created_at", desc=True)
         .execute()
     )
-    return result.data if result.data else []
 
 
-# ============================================================
-#  COMPATIBILIDAD CON EL DASHBOARD
-# ============================================================
+# ===============================================================
+# 📌 OBTENER OPERADOR POR ID
+# ===============================================================
+
+def get_operator(operator_id: str):
+    return (
+        table("ca_operators")
+        .select("*")
+        .eq("id", operator_id)
+        .single()
+        .execute()
+    )
+
+
+# ===============================================================
+# 📌 OBTENER INFO BÁSICA PARA DASHBOARD
+# ===============================================================
 
 def get_operator_info(operator_id: str):
-    """Devuelve la información necesaria para las vistas del dashboard."""
-    return get_operator_by_id(operator_id)
-
-
-def ensure_country_filter(operator):
-    """Devuelve lista de países permitidos para filtrar productos y sesiones."""
-    if not operator:
-        return ["ES"]
-    return operator.get("allowed_countries", ["ES"])
-
-
-def get_operator_global_seed(operator_id: str):
-    """Devuelve la semilla global del operador."""
-    result = (
-        supabase.table("operator_seeds")
-        .select("*")
-        .eq("operator_id", operator_id)
-        .limit(1)
+    return (
+        table("ca_operators")
+        .select("id, email, role, allowed_countries, global_access, organization_id")
+        .eq("id", operator_id)
+        .single()
         .execute()
     )
-    return result.data[0] if result.data else None
+
+
+# ===============================================================
+# 📌 COUNTRIES — ROLES Y PERMISOS
+# ===============================================================
+
+def get_operator_allowed_countries(operator_id: str):
+    op = get_operator(operator_id)
+    if not op:
+        return []
+    return op.get("allowed_countries", [])
+
+
+def ensure_country_filter(operator_id: str, country: str) -> bool:
+    """
+    Devuelve True si el operador TIENE permiso sobre country.
+    """
+    op = get_operator(operator_id)
+    if not op:
+        return False
+
+    if op.get("global_access"):
+        return True
+
+    allowed = op.get("allowed_countries") or []
+    return country in allowed
+
+
+# ===============================================================
+# 📌 CREAR OPERADOR
+# ===============================================================
+
+def create_operator(data: dict):
+    return table("ca_operators").insert(data).execute()
+
+
+# ===============================================================
+# 📌 ACTUALIZAR OPERADOR
+# ===============================================================
+
+def update_operator(operator_id: str, data: dict):
+    return (
+        table("ca_operators")
+        .update(data)
+        .eq("id", operator_id)
+        .execute()
+    )
+
+
+# ===============================================================
+# 📌 BORRAR OPERADOR (desactivar)
+# ===============================================================
+
+def disable_operator(operator_id: str):
+    return (
+        table("ca_operators")
+        .update({"active": False})
+        .eq("id", operator_id)
+        .execute()
+    )
+
+
+# ===============================================================
+# 📌 KYC LOGS
+# ===============================================================
+
+def list_operator_kyc_logs(operator_id: str):
+    return (
+        table("ca_operator_kyc")
+        .select("*")
+        .eq("operator_id", operator_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+
+# ===============================================================
+# 📌 GLOBAL SEED (para Engine Monitor)
+# ===============================================================
+
+def get_operator_global_seed(operator_id: str):
+    return (
+        table("ca_operator_seeds")
+        .select("*")
+        .eq("operator_id", operator_id)
+        .single()
+        .execute()
+    )
