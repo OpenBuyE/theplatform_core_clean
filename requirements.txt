@@ -1,29 +1,5 @@
-streamlit==1.51.0
-python-dotenv==1.0.1
-
-# Supabase stack
-supabase==2.3.5
-postgrest==0.13.2
-gotrue==2.4.2
-storage3==0.7.2
-supafunc==0.3.4
-
-# seguridad
-bcrypt==3.2.2
-cffi==1.17.1
-
-# fixes: HTTP core libs
-requests==2.32.3
-urllib3==2.2.2
-charset-normalizer==3.3.2
-idna==3.7
-certifi==2024.7.4
-
-# ---- filler lines (estabiliza instalador) ----
-# filler-a
-# filler-b
-# filler-c
-# filler-d
-# filler-e
-# filler-f
-# filler-g
+streamlit==1.29.0
+supabase
+python-dotenv
+bcrypt
+cffi
