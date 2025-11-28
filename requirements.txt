@@ -7,5 +7,5 @@ supafunc
 bcrypt==3.2.2
 cffi
 
-# Supabase client oficial (obligatorio)
-supabase==2.4.0
+# force rebuild
+
