@@ -7,4 +7,5 @@ storage3==0.7.2
 supafunc==0.3.4
 bcrypt==3.2.2
 cffi==1.17.1
-
+markdown-it-py
+rich
