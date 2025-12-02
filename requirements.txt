@@ -1,5 +1,9 @@
-streamlit==1.29.0
-supabase
+streamlit==1.51.0
 python-dotenv
-bcrypt
+supabase==2.3.5
+postgrest==0.13.2
+gotrue==2.4.2
+storage3==0.7.2
+supafunc==0.3.4
+bcrypt==3.2.2
 cffi
