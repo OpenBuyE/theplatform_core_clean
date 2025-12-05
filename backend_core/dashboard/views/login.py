@@ -1,35 +1,27 @@
 import streamlit as st
-from backend_core.services.session_manager import login, logout, is_logged_in
 
+def render():
+    st.warning("🟡 LOGIN EN MODO DIAGNÓSTICO — ACCESO DIRECTO ACTIVADO")
+    st.title("🔐 Operator Login (Debug Mode)")
 
-def render_login():
-    """
-    Pantalla de login.
-    Si el usuario ya está autenticado, muestra opción de logout.
-    """
+    st.markdown("### Acceso al Panel Administrativo (modo diagnóstico)")
+    st.markdown("El login real está temporalmente deshabilitado.")
 
-    st.title("🔐 Acceso al Panel Operativo")
+    st.text_input("Usuario / Email (ignorado en debug)")
+    st.text_input("Contraseña (ignorado en debug)", type="password")
 
-    if is_logged_in():
-        st.success(f"Sesión iniciada como: **{st.session_state['user_email']}**")
-        if st.button("Cerrar sesión"):
-            logout()
-            st.experimental_rerun()
-        return
+    if st.button("Iniciar Sesión"):
+        # 🔥 ACCESO DIRECTO SIN VALIDACIÓN
+        st.session_state["operator_id"] = "debug-operator"
+        st.session_state["email"] = "debug@example.com"
+        st.session_state["role"] = "admin_master"
+        st.session_state["full_name"] = "Debug Access"
+        st.session_state["allowed_countries"] = ["ES", "PT", "FR", "IT", "DE"]
+        st.session_state["global_access"] = True
+        st.session_state["organization_id"] = "debug-org"
 
-    st.markdown("Introduce tus credenciales para acceder:")
-
-    with st.form("login_form"):
-        email = st.text_input("Email", "")
-        password = st.text_input("Contraseña", type="password")
-        submitted = st.form_submit_button("Iniciar sesión")
-
-        if submitted:
-            if login(email, password):
-                st.success("Acceso correcto. Redirigiendo...")
-                st.experimental_rerun()
-            else:
-                st.error("Credenciales incorrectas. Inténtalo de nuevo.")
+        st.success("Accediendo al panel SIN login…")
+        st.experimental_rerun()
 
     st.markdown("---")
-    st.info("Si no tienes cuenta, solicita acceso al administrador del sistema.")
+    st.info("Modo diagnóstico activo. El login real volverá después de depurar.")
