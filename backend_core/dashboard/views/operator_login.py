@@ -9,13 +9,13 @@ from backend_core.services.supabase_client import table
 def authenticate_operator(identifier: str, password: str):
     """
     Autentica a un operador usando SOLO email.
-    (La columna 'username' NO existe en la tabla actual.)
+    Compatible con Supabase v2 (APIResponse con .data).
     """
     try:
-        result = (
+        resp = (
             table("ca_operators")
             .select("*")
-            .eq("email", identifier)     # <-- CORRECCIÓN CRÍTICA
+            .eq("email", identifier)
             .eq("active", True)
             .execute()
         )
@@ -23,10 +23,12 @@ def authenticate_operator(identifier: str, password: str):
         st.error(f"Error conectando con la base de datos: {e}")
         return None
 
-    if not result or len(result) == 0:
+    data = resp.data  # <-- CORRECCIÓN IMPORTANTE
+
+    if not data or len(data) == 0:
         return None
 
-    operator = result[0]
+    operator = data[0]
 
     stored_hash = operator.get("password_hash")
     if not stored_hash:
@@ -53,8 +55,7 @@ def render_operator_login():
         if operator:
             st.session_state["operator_id"] = operator["id"]
             st.session_state["email"] = operator.get("email")
-            # La tabla no contiene username, pero mantenemos la clave para compatibilidad
-            st.session_state["username"] = operator.get("username")
+            st.session_state["username"] = operator.get("username")  # no existe, queda None
             st.session_state["full_name"] = operator.get("full_name", "")
             st.session_state["role"] = operator.get("role", "operator")
             st.session_state["allowed_countries"] = operator.get("allowed_countries", [])
