@@ -11,6 +11,39 @@ def authenticate_operator(identifier: str, password: str):
     Autentica a un operador usando SOLO email.
     Compatible con Supabase v2 (APIResponse con .data).
     """
+
+    # MODO DEBUG ESPECIAL — si el usuario escribe "debug"
+    if identifier == "debug":
+        st.warning("🟡 MODO DEBUG ACTIVADO — Mostrando información interna del operador GlobalAdmin")
+
+        resp = (
+            table("ca_operators")
+            .select("*")
+            .eq("email", "GlobalAdmin")
+            .execute()
+        )
+
+        data = resp.data
+
+        if not data:
+            st.error("❌ No se encontró GlobalAdmin en la tabla.")
+            return None
+
+        operator = data[0]
+        stored_hash = operator.get("password_hash")
+
+        st.write("🔍 HASH EN BASE DE DATOS:", stored_hash)
+        st.write("🔍 LONGITUD HASH:", len(stored_hash) if stored_hash else "None")
+
+        try:
+            ok = bcrypt.checkpw(password.encode(), stored_hash.encode())
+            st.write("🔍 RESULTADO bcrypt.checkpw():", ok)
+        except Exception as e:
+            st.error(f"ERROR verificando bcrypt: {e}")
+
+        return None  # No hacemos login real en modo debug
+
+    # MODO NORMAL
     try:
         resp = (
             table("ca_operators")
@@ -34,8 +67,13 @@ def authenticate_operator(identifier: str, password: str):
     if not stored_hash:
         return None
 
-    if bcrypt.checkpw(password.encode(), stored_hash.encode()):
-        return operator
+    # Validación bcrypt
+    try:
+        if bcrypt.checkpw(password.encode(), stored_hash.encode()):
+            return operator
+    except Exception as e:
+        st.error(f"Error verificando la contraseña: {e}")
+        return None
 
     return None
 
