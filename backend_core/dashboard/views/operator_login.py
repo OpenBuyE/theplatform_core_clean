@@ -3,18 +3,19 @@ import bcrypt
 from backend_core.services.supabase_client import table
 
 # ---------------------------------------------------------
-# Operator Login — Email OR Username + Password
+# Operator Login — Email + Password
 # ---------------------------------------------------------
 
 def authenticate_operator(identifier: str, password: str):
     """
-    Autentica a un operador usando email O username.
+    Autentica a un operador usando SOLO email.
+    (La columna 'username' NO existe en la tabla actual.)
     """
     try:
         result = (
             table("ca_operators")
             .select("*")
-            .or_(f"email.eq.{identifier},username.eq.{identifier}")
+            .eq("email", identifier)     # <-- CORRECCIÓN CRÍTICA
             .eq("active", True)
             .execute()
         )
@@ -41,7 +42,7 @@ def render_operator_login():
     st.title("🔐 Operator Login")
 
     st.markdown("### Acceso al Panel Administrativo")
-    st.markdown("Use su *email* o su *username* para acceder.")
+    st.markdown("Use su *email* para acceder.")
 
     identifier = st.text_input("Usuario / Email")
     password = st.text_input("Contraseña", type="password")
@@ -52,6 +53,7 @@ def render_operator_login():
         if operator:
             st.session_state["operator_id"] = operator["id"]
             st.session_state["email"] = operator.get("email")
+            # La tabla no contiene username, pero mantenemos la clave para compatibilidad
             st.session_state["username"] = operator.get("username")
             st.session_state["full_name"] = operator.get("full_name", "")
             st.session_state["role"] = operator.get("role", "operator")
