@@ -1,5 +1,3 @@
-# backend_core/dashboard/views/operator_dashboard.py
-
 import streamlit as st
 from datetime import datetime
 
@@ -29,14 +27,23 @@ def render_operator_dashboard():
         st.error("Debe iniciar sesión como operador.")
         return
 
-    # Obtener info del operador (nivel + países)
+    # ---------------------------------------------------------
+    # Obtener info del operador (SUPABASE v2 SAFE)
+    # ---------------------------------------------------------
+    operator = None
     try:
-        operator = get_operator_info(operator_id)
-    except:
-        operator = None
+        resp = get_operator_info(operator_id)
+        operator = resp.data if resp else None
+    except Exception as e:
+        st.error(f"Error cargando operador: {e}")
+        return
 
-    country_list = operator.get("country_codes", ["ES"]) if operator else ["ES"]
-    role = operator.get("role", "operator") if operator else "operator"
+    if not operator:
+        st.error("No se pudo cargar la información del operador.")
+        return
+
+    country_list = operator.get("allowed_countries", ["ES"])
+    role = operator.get("role", "operator")
 
     st.write(f"**Operador:** `{operator_id}` — Rol: **{role}**")
     st.write(f"**Países autorizados:** {', '.join(country_list)}")
@@ -59,7 +66,7 @@ def render_operator_dashboard():
         return
 
     # =========================================================
-    # TARJETAS KPI (estilo corporate limpio)
+    # TARJETAS KPI
     # =========================================================
     _kpi_row(
         [
@@ -82,7 +89,6 @@ def render_operator_dashboard():
     # =========================================================
     # Vista especializada según rol
     # =========================================================
-
     if role in ["admin_master", "admin_global"]:
         st.subheader("🔧 Panel Administrador (Master)")
         st.info("Acceso completo a todos los KPIs globales.")
@@ -100,9 +106,6 @@ def render_operator_dashboard():
 # RENDER DE FILAS KPI
 # ======================================================================
 def _kpi_row(kpis):
-    """
-    Renderiza una fila horizontal de tarjetas KPI tipo fintech clean.
-    """
     cols = st.columns(len(kpis))
     for idx, (label, value, color) in enumerate(kpis):
         with cols[idx]:
@@ -113,10 +116,6 @@ def _kpi_row(kpis):
 # TARJETA KPI INDIVIDUAL
 # ======================================================================
 def _kpi_card(label: str, value: int, color: str):
-    """
-    Tarjeta KPI mínima, estilo Revolut/Stripe Dashboard.
-    """
-
     st.markdown(
         f"""
         <div style="
