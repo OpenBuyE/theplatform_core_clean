@@ -1,15 +1,22 @@
 # backend_core/services/kpi_repository.py
 
 from backend_core.services.supabase_client import table
-from backend_core.services.operator_repository import ensure_country_filter, get_operator
-
+from backend_core.services.operator_repository import (
+    ensure_country_filter,
+    get_operator,
+)
 
 # ==========================================================================
 # Helpers
 # ==========================================================================
-def _count(q):
+
+def _count(query):
+    """
+    Ejecuta una query Supabase y devuelve el número de filas.
+    Compatible con Supabase v2 (APIResponse).
+    """
     try:
-        res = q.execute()
+        res = query.execute()
         if hasattr(res, "data") and res.data is not None:
             return len(res.data)
         return 0
@@ -19,14 +26,19 @@ def _count(q):
 
 def _resolve_countries(operator_id: str, country: str | None):
     """
-    Si se pasa country → valida permiso.
-    Si NO se pasa → devuelve lista de países permitidos.
+    Determina los países válidos para un operador.
+    - Si se pasa country: valida permisos
+    - Si NO se pasa country: usa allowed_countries del operador
     """
+    # Caso 1: country explícito
     if country:
-        c = ensure_country_filter(operator_id, country)
-        return [c] if c else []
+        allowed = ensure_country_filter(operator_id, country)
+        return [allowed] if allowed else []
 
-    op = get_operator(operator_id)
+    # Caso 2: todos los países permitidos
+    resp = get_operator(operator_id)
+    op = resp.data if resp else None
+
     if not op:
         return []
 
@@ -39,10 +51,10 @@ def _resolve_countries(operator_id: str, country: str | None):
 # ==========================================================================
 # KPI CORE FUNCTIONS
 # ==========================================================================
+
 def _sessions_by_status(operator_id: str, status: str, country: str | None = None):
-    countries = _resolve_countries(operator_id, country)
     total = 0
-    for c in countries:
+    for c in _resolve_countries(operator_id, country):
         total += _count(
             table("ca_sessions")
             .select("id")
@@ -53,9 +65,8 @@ def _sessions_by_status(operator_id: str, status: str, country: str | None = Non
 
 
 def _simple_count(table_name: str, operator_id: str, country: str | None = None):
-    countries = _resolve_countries(operator_id, country)
     total = 0
-    for c in countries:
+    for c in _resolve_countries(operator_id, country):
         total += _count(
             table(table_name)
             .select("id")
@@ -67,6 +78,7 @@ def _simple_count(table_name: str, operator_id: str, country: str | None = None)
 # ==========================================================================
 # PUBLIC KPI FUNCTIONS (MODERN)
 # ==========================================================================
+
 def sessions_active(operator_id: str, country: str | None = None):
     return _sessions_by_status(operator_id, "active", country)
 
@@ -96,12 +108,14 @@ def categories_total(operator_id: str, country: str | None = None):
 
 
 def wallets_total(operator_id: str, country: str | None = None):
-    return 0  # AÚN NO IMPLEMENTADO
+    # Aún no implementado
+    return 0
 
 
 # ==========================================================================
-# LEGACY WRAPPERS (COMPATIBILIDAD TOTAL)
+# LEGACY WRAPPERS (COMPATIBILIDAD TOTAL CON DASHBOARDS)
 # ==========================================================================
+
 def get_kpi_sessions_active(o, c=None): return sessions_active(o, c)
 def get_kpi_sessions_parked(o, c=None): return sessions_parked(o, c)
 def get_kpi_sessions_finished(o, c=None): return sessions_finished(o, c)
@@ -113,5 +127,5 @@ def get_kpi_categories_total(o, c=None): return categories_total(o, c)
 
 def get_kpi_wallets_total(o, c=None): return wallets_total(o, c)
 
-# Alias antiguos
+# Alias antiguos usados por vistas legacy
 def wallet_deposit_ok(o, c=None): return wallets_total(o, c)
