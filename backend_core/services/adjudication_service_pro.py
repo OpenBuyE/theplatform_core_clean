@@ -4,6 +4,14 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
 
 from backend_core.services.supabase_client import table
+
+# ✅ Intentamos importar el cliente supabase para usar rpc()
+# Si tu supabase_client.py no expone 'supabase', ajusta este import.
+try:
+    from backend_core.services.supabase_client import supabase  # type: ignore
+except Exception:  # pragma: no cover
+    supabase = None  # fallback controlado
+
 from backend_core.services.audit_repository import log_event
 
 from backend_core.models.adjudication_models import (
@@ -23,6 +31,8 @@ ENGINE_VERSION = "2.0.0"
 ALGORITHM_ID = "deterministic_sha256_minhash"
 NORMALIZATION = "stable_sort_by_participant_id"
 
+RPC_FINALIZE = "ca_finalize_adjudication_pro"
+
 
 # ==========================================================
 # 🔹 ERRORES DOMINIO
@@ -34,6 +44,10 @@ class InvariantViolationError(ValueError):
 
 class ConcurrencyAdjudicationError(RuntimeError):
     """Error inesperado de concurrencia durante la adjudicación."""
+
+
+class RpcNotAvailableError(RuntimeError):
+    """El cliente Supabase no expone rpc(); requiere wrapper en supabase_client.py."""
 
 
 # ==========================================================
@@ -61,9 +75,7 @@ def _unique(values: List[str]) -> bool:
 def _load_session_snapshot(session_id: str) -> SessionSnapshot:
     resp = (
         table("ca_sessions")
-        .select(
-            "id, product_id, created_at, closed_at, capacity, rules_version, status"
-        )
+        .select("id, product_id, created_at, closed_at, capacity, rules_version, status")
         .eq("id", session_id)
         .single()
         .execute()
@@ -160,85 +172,72 @@ def _get_existing_adjudication(session_id: str) -> Optional[Dict[str, Any]]:
 
 
 # ==========================================================
-# 🔹 PERSISTENCIA PRO (COMPATIBLE DB LEGACY)
+# 🔹 RPC FINALIZE (ATÓMICO)
 # ==========================================================
 
-def _persist_adjudication_pro(
+def _rpc_finalize_adjudication(
     *,
     session_id: str,
     awarded_participant_id: str,
     result: Any,
-) -> None:
+) -> Dict[str, Any]:
     """
-    Persistencia inmutable PRO.
-    Semántica interna: awarded
-    Columna DB legacy: winner_participant_id
+    Llama a la RPC transaccional en Postgres:
+      public.ca_finalize_adjudication_pro(...)
+    Mantiene semántica awarded; DB legacy usa winner_participant_id internamente.
     """
+    if supabase is None or not hasattr(supabase, "rpc"):
+        raise RpcNotAvailableError(
+            "Supabase client no disponible o no expone rpc(). "
+            "Expón `supabase` en supabase_client.py o añade wrapper rpc()."
+        )
+
     payload = {
-        "session_id": session_id,
-        # ⚠️ LEGACY DB COLUMN (aislada aquí)
-        "winner_participant_id": awarded_participant_id,
-        "ranking": result.ranking,
-        "seed": result.seed,
-        "inputs_hash": result.inputs_hash,
-        "proof_hash": result.proof_hash,
-        "engine_version": result.engine_version,
-        "algorithm_id": result.algorithm_id,
-        "created_at": _now_utc_iso(),
+        "p_session_id": session_id,
+        "p_awarded_participant_id": awarded_participant_id,
+        "p_ranking": result.ranking,
+        "p_seed": result.seed,
+        "p_inputs_hash": result.inputs_hash,
+        "p_proof_hash": result.proof_hash,
+        "p_engine_version": result.engine_version,
+        "p_algorithm_id": result.algorithm_id,
     }
 
-    # UNIQUE(session_id) garantiza idempotencia fuerte
-    table("ca_adjudications").insert(payload).execute()
+    resp = supabase.rpc(RPC_FINALIZE, payload).execute()
+    data = resp.data
 
+    # PostgREST suele devolver lista con 1 fila (returns table)
+    if isinstance(data, list) and data:
+        return data[0]
+    if isinstance(data, dict) and data:
+        return data
 
-def _mark_participant_awarded(session_id: str, participant_id: str) -> None:
-    """
-    Estado derivado (recalculable).
-    Garantiza un único adjudicado por sesión.
-    """
-    table("ca_participants") \
-        .update({"is_awarded": False}) \
-        .eq("session_id", session_id) \
-        .execute()
-
-    table("ca_participants") \
-        .update({"is_awarded": True}) \
-        .eq("id", participant_id) \
-        .execute()
-
-
-def _finalize_session(session_id: str, awarded_participant_id: str) -> None:
-    payload = {"status": "finished"}
-
-    # Si la columna existe, se rellena (si no existe, no rompe Supabase)
-    payload["awarded_participant_id"] = awarded_participant_id
-
-    table("ca_sessions") \
-        .update(payload) \
-        .eq("id", session_id) \
-        .execute()
+    # Si no hay data, levantamos con contexto
+    raise RuntimeError(f"RPC {RPC_FINALIZE} devolvió respuesta vacía: {data!r}")
 
 
 # ==========================================================
-# 🔹 SERVICIO PÚBLICO — ORQUESTACIÓN DETERMINISTA PRO
+# 🔹 SERVICIO PÚBLICO — ORQUESTACIÓN DETERMINISTA PRO (ATÓMICO)
 # ==========================================================
 
 def adjudicate_session_pro(session_id: str) -> Dict[str, Any]:
     """
-    Servicio determinista PRO:
+    Servicio determinista PRO (ATÓMICO via RPC):
 
     - Idempotente (UNIQUE session_id en DB)
     - Reproducible
     - Auditable
     - Semántica awarded (no lottery, no winner)
+    - Persistencia + marcado + finalización en una sola transacción SQL
     """
 
-    # 0) Idempotencia rápida
+    # 0) Idempotencia rápida (fast path)
     existing = _get_existing_adjudication(session_id)
     if existing:
         return {
             "session_id": session_id,
             "status": "ALREADY_ADJUDICATED",
+            # DB legacy column:
             "awarded_participant_id": existing.get("winner_participant_id"),
             "engine_version": existing.get("engine_version"),
             "algorithm_id": existing.get("algorithm_id"),
@@ -263,15 +262,19 @@ def adjudicate_session_pro(session_id: str) -> Dict[str, Any]:
 
     awarded_participant_id = result.awarded_participant_id
 
-    # 4) Persistencia PRO (blindada por DB)
+    # 4) Finalización atómica (DB transaction)
     try:
-        _persist_adjudication_pro(
+        rpc_out = _rpc_finalize_adjudication(
             session_id=session_id,
             awarded_participant_id=awarded_participant_id,
             result=result,
         )
+    except RpcNotAvailableError:
+        # Fallback ultra conservador: no hacemos updates sueltos aquí.
+        # Preferimos fallar explícitamente para no volver a estados intermedios.
+        raise
     except Exception:
-        # Carrera concurrente: leemos lo ya persistido
+        # Si por concurrencia ya existe, devolvemos lo persistido
         existing_after = _get_existing_adjudication(session_id)
         if existing_after:
             return {
@@ -282,14 +285,10 @@ def adjudicate_session_pro(session_id: str) -> Dict[str, Any]:
                 "algorithm_id": existing_after.get("algorithm_id"),
             }
         raise ConcurrencyAdjudicationError(
-            "Fallo al persistir adjudicación y no se pudo recuperar la existente."
+            "Fallo en finalización atómica y no se pudo recuperar la adjudicación existente."
         )
 
-    # 5) Estados derivados (re-ejecutables)
-    _mark_participant_awarded(session_id, awarded_participant_id)
-    _finalize_session(session_id, awarded_participant_id)
-
-    # 6) Auditoría
+    # 5) Auditoría (fuera de la transacción; evidencia criptográfica ya persistida)
     log_event(
         event_type="session_adjudicated_pro",
         session_id=session_id,
@@ -300,13 +299,17 @@ def adjudicate_session_pro(session_id: str) -> Dict[str, Any]:
             "proof_hash": result.proof_hash,
             "engine_version": result.engine_version,
             "algorithm_id": result.algorithm_id,
+            "rpc_status": rpc_out.get("status") if isinstance(rpc_out, dict) else None,
         },
     )
 
+    # 6) Respuesta estable (semántica awarded)
     return {
         "session_id": session_id,
-        "status": "ADJUDICATED",
-        "awarded_participant_id": awarded_participant_id,
+        "status": rpc_out.get("status", "ADJUDICATED") if isinstance(rpc_out, dict) else "ADJUDICATED",
+        "awarded_participant_id": (
+            rpc_out.get("awarded_participant_id") if isinstance(rpc_out, dict) else awarded_participant_id
+        ),
         "engine_version": result.engine_version,
         "algorithm_id": result.algorithm_id,
     }
