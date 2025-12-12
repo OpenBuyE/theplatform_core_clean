@@ -22,7 +22,8 @@ def render_admin_engine():
         Este panel permite:
 
         • Disparar manualmente el **motor determinista PRO** (vía Modal, cuando esté activo)  
-        • Verificar adjudicaciones mediante **Replay & Verify determinista + auditoría criptográfica**
+        • Verificar adjudicaciones mediante **Replay & Verify determinista + auditoría criptográfica**  
+        • Generar **Proof Bundles auditables** (IP / Patente / Notaría)
 
         ⚠️ En producción, la adjudicación debe ejecutarse automáticamente.
         """
@@ -40,7 +41,7 @@ def render_admin_engine():
     if not modal_url:
         st.warning(
             "MODAL_ADJUDICATION_URL no configurado. "
-            "Puedes continuar usando Replay & Verify sin Modal."
+            "Puedes continuar usando Replay & Verify y Proof Bundles sin Modal."
         )
     else:
         limit = st.number_input(
@@ -94,65 +95,134 @@ def render_admin_engine():
     st.markdown("---")
 
     # =====================================================
-    # 🔎 REPLAY & VERIFY — AUDITORÍA PRO (NUEVO BLOQUE)
+    # 🔎 REPLAY & VERIFY — AUDITORÍA PRO
     # =====================================================
     st.subheader("🔎 Replay & Verify — Auditoría determinista PRO")
 
     st.markdown(
         """
-        Esta herramienta **recalcula la adjudicación** a partir de los snapshots históricos
-        y verifica que **coincide exactamente** con la adjudicación persistida.
+        Recalcula la adjudicación a partir de snapshots históricos
+        y verifica que **coincide exactamente** con lo persistido.
 
         ✔ Sin azar  
         ✔ Reproducible  
         ✔ Auditable  
-        ✔ Legal-grade / IP-ready  
         """
     )
 
-    session_id = st.text_input(
+    session_id_verify = st.text_input(
         "Session ID a verificar (UUID)",
+        key="replay_verify_session_id",
         placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
     )
 
     if st.button("✅ Verificar adjudicación (Replay determinista)"):
-        if not session_id.strip():
+        if not session_id_verify.strip():
             st.error("Introduce un Session ID válido.")
             return
 
         try:
-            # Import explícito del servicio PRO
             from backend_core.services.adjudication_replay_verify_pro import (
                 replay_verify_session,
             )
 
             with st.spinner("Recalculando adjudicación determinista…"):
-                report = replay_verify_session(session_id.strip())
+                report = replay_verify_session(session_id_verify.strip())
 
-            # Presentación del reporte completo (audit-friendly)
             st.markdown("### 📄 Informe de verificación")
             st.json(report.__dict__)
 
-            # Evaluación semántica
             if report.matches:
                 st.success(
-                    "VERIFIED ✅\n\n"
-                    "La adjudicación almacenada coincide exactamente con el replay del motor "
-                    "determinista PRO (awarded, hashes, ranking, versión de algoritmo)."
+                    "VERIFIED ✅ Coincidencia total entre DB y motor determinista PRO."
                 )
             else:
                 st.error(
-                    f"MISMATCH ❌\n\n"
-                    f"Motivo: {report.reason}\n\n"
-                    "Existe una discrepancia entre la adjudicación persistida "
-                    "y el resultado reproducido por el motor."
+                    f"MISMATCH ❌\n\nMotivo: {report.reason}"
                 )
 
         except Exception as e:
             st.error(f"Error durante Replay & Verify: {e}")
 
     st.markdown("---")
+
+    # =====================================================
+    # 📦 PROOF BUNDLE — IP / PATENTE
+    # =====================================================
+    st.subheader("📦 Proof Bundle — Evidencia IP / Patente")
+
+    st.markdown(
+        """
+        Genera un **Proof Bundle determinista** autocontenido, apto para:
+
+        • Registro de Propiedad Intelectual  
+        • Patente (algoritmo / sistema)  
+        • Notaría / sellado temporal  
+        • Auditoría legal y técnica  
+
+        El bundle incluye:
+        - Snapshots mínimos
+        - Contexto congelado del algoritmo
+        - Evidencias criptográficas
+        - Replay verificado
+        """
+    )
+
+    session_id_bundle = st.text_input(
+        "Session ID para generar Proof Bundle (UUID)",
+        key="proof_bundle_session_id",
+        placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        include_participants = st.checkbox(
+            "Incluir snapshot mínimo de participantes",
+            value=True,
+        )
+    with col2:
+        strict_verify = st.checkbox(
+            "Verificación estricta (DB vs Replay)",
+            value=True,
+        )
+
+    if st.button("📦 Generar Proof Bundle"):
+        if not session_id_bundle.strip():
+            st.error("Introduce un Session ID válido.")
+            return
+
+        try:
+            from backend_core.services.adjudication_proof_bundle_pro import (
+                build_proof_bundle_for_session,
+            )
+
+            with st.spinner("Generando Proof Bundle determinista…"):
+                pb = build_proof_bundle_for_session(
+                    session_id_bundle.strip(),
+                    include_participants=include_participants,
+                    strict_verify=strict_verify,
+                )
+
+            st.success("Proof Bundle generado correctamente")
+
+            st.markdown("### 🔐 Hash criptográfico del bundle")
+            st.code(pb.bundle_hash)
+
+            st.markdown("### 📄 Contenido del Proof Bundle")
+            st.json(pb.bundle)
+
+            st.download_button(
+                label="⬇️ Descargar Proof Bundle (JSON canónico)",
+                data=pb.canonical_json,
+                file_name=f"proof_bundle_{session_id_bundle.strip()}.json",
+                mime="application/json",
+            )
+
+        except Exception as e:
+            st.error(f"Error generando Proof Bundle: {e}")
+
+    st.markdown("---")
     st.info(
-        "Este panel es exclusivamente de **orquestación y auditoría**.\n\n"
-        "La lógica crítica del motor determinista vive fuera del dashboard."
+        "Este panel **no contiene lógica crítica**.\n\n"
+        "El motor determinista, la adjudicación y la auditoría viven fuera del dashboard."
     )
