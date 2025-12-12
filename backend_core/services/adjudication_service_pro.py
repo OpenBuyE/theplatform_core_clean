@@ -16,7 +16,7 @@ from backend_core.engines.adjudicator_engine_pro import adjudicate
 
 
 # ==========================================================
-# 🔹 CONFIG MOTOR PRO (congelado)
+# 🔹 CONFIGURACIÓN CONGELADA — MOTOR DETERMINISTA PRO
 # ==========================================================
 
 ENGINE_VERSION = "2.0.0"
@@ -25,15 +25,15 @@ NORMALIZATION = "stable_sort_by_participant_id"
 
 
 # ==========================================================
-# 🔹 ERRORES PRO
+# 🔹 ERRORES DOMINIO
 # ==========================================================
 
 class InvariantViolationError(ValueError):
-    """Closed-session invariants or snapshot invariants are not satisfied."""
+    """Violación de invariantes deterministas (sesión, snapshots, aforo, etc.)."""
 
 
 class ConcurrencyAdjudicationError(RuntimeError):
-    """Unexpected concurrency issue when persisting adjudication."""
+    """Error inesperado de concurrencia durante la adjudicación."""
 
 
 # ==========================================================
@@ -50,18 +50,20 @@ def _parse_dt(value) -> datetime:
     return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
-def _unique_ids(values: List[str]) -> bool:
+def _unique(values: List[str]) -> bool:
     return len(values) == len(set(values))
 
 
 # ==========================================================
-# 🔹 CARGA SNAPSHOTS (DB → MODELOS INMUTABLES)
+# 🔹 SNAPSHOTS INMUTABLES (DB → MODELOS)
 # ==========================================================
 
 def _load_session_snapshot(session_id: str) -> SessionSnapshot:
     resp = (
         table("ca_sessions")
-        .select("id, product_id, created_at, closed_at, capacity, rules_version, status")
+        .select(
+            "id, product_id, created_at, closed_at, capacity, rules_version, status"
+        )
         .eq("id", session_id)
         .single()
         .execute()
@@ -71,7 +73,6 @@ def _load_session_snapshot(session_id: str) -> SessionSnapshot:
     if not s:
         raise InvariantViolationError("Sesión no encontrada.")
 
-    # Debe estar cerrada para adjudicar (aceptamos finished para replay/idempotencia)
     if s.get("status") not in ("closed", "finished"):
         raise InvariantViolationError(
             "La sesión no está en estado cerrado/terminado (closed/finished)."
@@ -95,12 +96,11 @@ def _load_session_snapshot(session_id: str) -> SessionSnapshot:
 
 
 def _load_participants_snapshot(session_id: str) -> List[ParticipantSnapshot]:
-    # Nota: si tu tabla real fuera ca_session_participants, aquí sería el único cambio.
     resp = (
         table("ca_participants")
         .select("id, user_id, participations, created_at, session_id")
         .eq("session_id", session_id)
-        .order("id")  # el motor NO debe depender de esto; solo comodidad de lectura
+        .order("id")  # solo lectura; el motor no depende del orden
         .execute()
     )
 
@@ -108,9 +108,9 @@ def _load_participants_snapshot(session_id: str) -> List[ParticipantSnapshot]:
     if not rows:
         raise InvariantViolationError("No hay participantes en la sesión.")
 
-    out: List[ParticipantSnapshot] = []
+    participants: List[ParticipantSnapshot] = []
     for r in rows:
-        out.append(
+        participants.append(
             ParticipantSnapshot(
                 participant_id=r["id"],
                 user_id=r["user_id"],
@@ -118,29 +118,34 @@ def _load_participants_snapshot(session_id: str) -> List[ParticipantSnapshot]:
                 joined_at=_parse_dt(r["created_at"]),
             )
         )
-    return out
+
+    return participants
 
 
-def _load_snapshot_bundle(session_id: str) -> Tuple[SessionSnapshot, List[ParticipantSnapshot]]:
+def _load_snapshot_bundle(
+    session_id: str,
+) -> Tuple[SessionSnapshot, List[ParticipantSnapshot]]:
     session_snapshot = _load_session_snapshot(session_id)
     participants_snapshot = _load_participants_snapshot(session_id)
 
-    # Invariantes formales mínimas (antes del motor)
+    # Invariantes deterministas duras
     if len(participants_snapshot) != int(session_snapshot.capacity):
         raise InvariantViolationError(
-            f"Aforo incompleto o inconsistente: participants={len(participants_snapshot)} "
-            f"capacity={session_snapshot.capacity}."
+            f"Aforo inconsistente: participants={len(participants_snapshot)} "
+            f"capacity={session_snapshot.capacity}"
         )
 
     ids = [p.participant_id for p in participants_snapshot]
-    if not _unique_ids(ids):
-        raise InvariantViolationError("Duplicidad de participant_id en el snapshot de participantes.")
+    if not _unique(ids):
+        raise InvariantViolationError(
+            "Duplicidad de participant_id en snapshot de participantes."
+        )
 
     return session_snapshot, participants_snapshot
 
 
 # ==========================================================
-# 🔹 IDEMPOTENCIA (NO DUPLICAR ADJUDICACIONES)
+# 🔹 IDEMPOTENCIA (LECTURA DB)
 # ==========================================================
 
 def _get_existing_adjudication(session_id: str) -> Optional[Dict[str, Any]]:
@@ -155,17 +160,24 @@ def _get_existing_adjudication(session_id: str) -> Optional[Dict[str, Any]]:
 
 
 # ==========================================================
-# 🔹 PERSISTENCIA PRO (DB)
+# 🔹 PERSISTENCIA PRO (COMPATIBLE DB LEGACY)
 # ==========================================================
 
-def _persist_adjudication_pro(*, session_id: str, result: Any) -> None:
+def _persist_adjudication_pro(
+    *,
+    session_id: str,
+    awarded_participant_id: str,
+    result: Any,
+) -> None:
     """
-    Guarda la adjudicación PRO en ca_adjudications.
-    Inmutable / idempotente por UNIQUE(session_id) en DB.
+    Persistencia inmutable PRO.
+    Semántica interna: awarded
+    Columna DB legacy: winner_participant_id
     """
     payload = {
         "session_id": session_id,
-        "awarded_participant_id": result.awarded_participant_id,
+        # ⚠️ LEGACY DB COLUMN (aislada aquí)
+        "winner_participant_id": awarded_participant_id,
         "ranking": result.ranking,
         "seed": result.seed,
         "inputs_hash": result.inputs_hash,
@@ -175,22 +187,20 @@ def _persist_adjudication_pro(*, session_id: str, result: Any) -> None:
         "created_at": _now_utc_iso(),
     }
 
-    # Importante: asume constraint UNIQUE(session_id) en ca_adjudications.
+    # UNIQUE(session_id) garantiza idempotencia fuerte
     table("ca_adjudications").insert(payload).execute()
 
 
 def _mark_participant_awarded(session_id: str, participant_id: str) -> None:
     """
-    Marcado derivado: NO afecta a la inmutabilidad de ca_adjudications.
-    Recomendación: además desmarcar el resto para garantizar unicidad.
+    Estado derivado (recalculable).
+    Garantiza un único adjudicado por sesión.
     """
-    # 1) Desmarcar todos los participantes de la sesión (opcional pero recomendado)
     table("ca_participants") \
         .update({"is_awarded": False}) \
         .eq("session_id", session_id) \
         .execute()
 
-    # 2) Marcar adjudicado
     table("ca_participants") \
         .update({"is_awarded": True}) \
         .eq("id", participant_id) \
@@ -198,12 +208,9 @@ def _mark_participant_awarded(session_id: str, participant_id: str) -> None:
 
 
 def _finalize_session(session_id: str, awarded_participant_id: str) -> None:
-    """
-    Deja la sesión en finished y (si existe columna) guarda awarded_participant_id para lectura rápida.
-    Si esa columna no existe, puedes quitarla del update.
-    """
     payload = {"status": "finished"}
-    # Si tu tabla tiene awarded_participant_id, mantenlo. Si no, elimina esta línea.
+
+    # Si la columna existe, se rellena (si no existe, no rompe Supabase)
     payload["awarded_participant_id"] = awarded_participant_id
 
     table("ca_sessions") \
@@ -213,17 +220,17 @@ def _finalize_session(session_id: str, awarded_participant_id: str) -> None:
 
 
 # ==========================================================
-# 🔹 SERVICIO PRINCIPAL
+# 🔹 SERVICIO PÚBLICO — ORQUESTACIÓN DETERMINISTA PRO
 # ==========================================================
 
 def adjudicate_session_pro(session_id: str) -> Dict[str, Any]:
     """
-    Orquestación PRO:
-    - idempotente
-    - auditable
-    - coherencia semántica (awarded)
-    - validación de invariantes
-    - robusto ante concurrencia (asumiendo UNIQUE(session_id) en ca_adjudications)
+    Servicio determinista PRO:
+
+    - Idempotente (UNIQUE session_id en DB)
+    - Reproducible
+    - Auditable
+    - Semántica awarded (no lottery, no winner)
     """
 
     # 0) Idempotencia rápida
@@ -232,59 +239,62 @@ def adjudicate_session_pro(session_id: str) -> Dict[str, Any]:
         return {
             "session_id": session_id,
             "status": "ALREADY_ADJUDICATED",
-            "awarded_participant_id": existing.get("awarded_participant_id"),
+            "awarded_participant_id": existing.get("winner_participant_id"),
             "engine_version": existing.get("engine_version"),
             "algorithm_id": existing.get("algorithm_id"),
         }
 
-    # 1) Snapshots + invariantes
+    # 1) Snapshots inmutables + invariantes
     session_snapshot, participants_snapshot = _load_snapshot_bundle(session_id)
 
-    # 2) Contexto motor (congelado)
+    # 2) Contexto determinista congelado
     context = DeterministicContext(
         engine_version=ENGINE_VERSION,
         algorithm_id=ALGORITHM_ID,
         normalization=NORMALIZATION,
     )
 
-    # 3) Motor PRO (puro)
+    # 3) Motor determinista puro
     result = adjudicate(
         session=session_snapshot,
         participants=participants_snapshot,
         context=context,
     )
 
-    # 4) Persistencia + marcado awarded + finalize
-    #    Sin transacción real (Supabase REST no la garantiza aquí). En su lugar:
-    #    - Confiamos en UNIQUE(session_id) para idempotencia fuerte.
-    #    - En caso de carrera, leemos la adjudicación existente y devolvemos.
+    awarded_participant_id = result.awarded_participant_id
+
+    # 4) Persistencia PRO (blindada por DB)
     try:
-        _persist_adjudication_pro(session_id=session_id, result=result)
+        _persist_adjudication_pro(
+            session_id=session_id,
+            awarded_participant_id=awarded_participant_id,
+            result=result,
+        )
     except Exception:
-        # Caso típico: otra ejecución persistió antes (race). Leemos y devolvemos.
+        # Carrera concurrente: leemos lo ya persistido
         existing_after = _get_existing_adjudication(session_id)
         if existing_after:
             return {
                 "session_id": session_id,
                 "status": "ALREADY_ADJUDICATED",
-                "awarded_participant_id": existing_after.get("awarded_participant_id"),
+                "awarded_participant_id": existing_after.get("winner_participant_id"),
                 "engine_version": existing_after.get("engine_version"),
                 "algorithm_id": existing_after.get("algorithm_id"),
             }
         raise ConcurrencyAdjudicationError(
-            "Error al persistir adjudicación y no se pudo recuperar el registro existente."
+            "Fallo al persistir adjudicación y no se pudo recuperar la existente."
         )
 
-    # Efectos derivados (best-effort; si falla, se puede re-ejecutar idempotente)
-    _mark_participant_awarded(session_id=session_id, participant_id=result.awarded_participant_id)
-    _finalize_session(session_id=session_id, awarded_participant_id=result.awarded_participant_id)
+    # 5) Estados derivados (re-ejecutables)
+    _mark_participant_awarded(session_id, awarded_participant_id)
+    _finalize_session(session_id, awarded_participant_id)
 
-    # 5) Auditoría
+    # 6) Auditoría
     log_event(
         event_type="session_adjudicated_pro",
         session_id=session_id,
         payload={
-            "awarded_participant_id": result.awarded_participant_id,
+            "awarded_participant_id": awarded_participant_id,
             "seed": result.seed,
             "inputs_hash": result.inputs_hash,
             "proof_hash": result.proof_hash,
@@ -296,7 +306,7 @@ def adjudicate_session_pro(session_id: str) -> Dict[str, Any]:
     return {
         "session_id": session_id,
         "status": "ADJUDICATED",
-        "awarded_participant_id": result.awarded_participant_id,
+        "awarded_participant_id": awarded_participant_id,
         "engine_version": result.engine_version,
         "algorithm_id": result.algorithm_id,
     }
