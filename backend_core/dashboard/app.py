@@ -9,7 +9,6 @@ from backend_core.dashboard.ui.layout import (
     render_sidebar,
 )
 
-
 # =========================================================
 # DIAGNÓSTICO DE IMPORTS
 # =========================================================
@@ -62,7 +61,7 @@ def render_page(page: str):
         try:
             module = __import__(f"backend_core.dashboard.views.{module_name}", fromlist=[func_name])
             return getattr(module, func_name)
-        except:
+        except Exception:
             return None
 
     routes = {
@@ -118,6 +117,9 @@ def main():
 
     diagnostic_imports()
 
+    # 🔑 CAMBIO CLAVE: forzar página por defecto tras login
+    default_index = 1 if "operator_id" in st.session_state else 0
+
     page = st.sidebar.selectbox(
         "Navigation",
         [
@@ -144,6 +146,7 @@ def main():
             "Admin Engine",
             "Contract Payment Status",
         ],
+        index=default_index,
     )
 
     # Protege todo excepto el login
