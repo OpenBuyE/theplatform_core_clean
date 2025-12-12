@@ -1,3 +1,5 @@
+# backend_core/dashboard/views/operator_dashboard.py
+
 import streamlit as st
 from datetime import datetime
 
@@ -28,7 +30,7 @@ def render_operator_dashboard():
         return
 
     # ---------------------------------------------------------
-    # Obtener info del operador (SUPABASE v2 SAFE)
+    # Obtener info del operador (Supabase v2 SAFE)
     # ---------------------------------------------------------
     operator = None
     try:
@@ -42,16 +44,27 @@ def render_operator_dashboard():
         st.error("No se pudo cargar la información del operador.")
         return
 
-    country_list = operator.get("allowed_countries", ["ES"])
-    role = operator.get("role", "operator")
+    # Nombre humano del operador (fallback seguro)
+    display_name = (
+        operator.get("full_name")
+        or operator.get("name")
+        or operator.get("email")
+        or operator_id
+    )
 
-    st.write(f"**Operador:** `{operator_id}` — Rol: **{role}**")
+    role = operator.get("role", "operator")
+    country_list = operator.get("allowed_countries", ["ES"])
+
+    # ---------------------------------------------------------
+    # Header operador
+    # ---------------------------------------------------------
+    st.write(f"**Operador:** {display_name} — Rol: **{role}**")
     st.write(f"**Países autorizados:** {', '.join(country_list)}")
 
     st.markdown("---")
 
     # ---------------------------------------------------------
-    # Cargar KPIs multi-país filtrados por permisos
+    # Cargar KPIs (agregados por países permitidos)
     # ---------------------------------------------------------
     try:
         kpi_active = get_kpi_sessions_active(operator_id)
