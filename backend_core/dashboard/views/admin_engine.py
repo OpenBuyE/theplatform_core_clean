@@ -1,5 +1,3 @@
-# backend_core/dashboard/views/admin_engine.py
-
 import streamlit as st
 import requests
 
@@ -24,7 +22,7 @@ def render_admin_engine():
         Este panel permite:
 
         • Disparar manualmente el **motor determinista PRO** (vía Modal, cuando esté activo)  
-        • Verificar adjudicaciones mediante **replay determinista + auditoría criptográfica**
+        • Verificar adjudicaciones mediante **Replay & Verify determinista + auditoría criptográfica**
 
         ⚠️ En producción, la adjudicación debe ejecutarse automáticamente.
         """
@@ -96,50 +94,58 @@ def render_admin_engine():
     st.markdown("---")
 
     # =====================================================
-    # 🔎 REPLAY & VERIFY — AUDITORÍA PRO
+    # 🔎 REPLAY & VERIFY — AUDITORÍA PRO (NUEVO BLOQUE)
     # =====================================================
     st.subheader("🔎 Replay & Verify — Auditoría determinista PRO")
 
     st.markdown(
         """
-        Esta herramienta **recalcula la adjudicación** desde los datos históricos
-        y verifica que **coincide exactamente** con lo almacenado en base de datos.
+        Esta herramienta **recalcula la adjudicación** a partir de los snapshots históricos
+        y verifica que **coincide exactamente** con la adjudicación persistida.
 
         ✔ Sin azar  
         ✔ Reproducible  
         ✔ Auditable  
+        ✔ Legal-grade / IP-ready  
         """
     )
 
-    session_id = st.text_input("Session ID a verificar (UUID)")
+    session_id = st.text_input(
+        "Session ID a verificar (UUID)",
+        placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    )
 
-    if st.button("✅ Verificar adjudicación (Replay)"):
+    if st.button("✅ Verificar adjudicación (Replay determinista)"):
         if not session_id.strip():
             st.error("Introduce un Session ID válido.")
             return
 
-        from backend_core.services.adjudication_replay_service import replay_and_verify
-
         try:
-            report = replay_and_verify(session_id.strip())
-            st.write(report)
+            # Import explícito del servicio PRO
+            from backend_core.services.adjudication_replay_verify_pro import (
+                replay_verify_session,
+            )
 
-            status = report.get("status")
+            with st.spinner("Recalculando adjudicación determinista…"):
+                report = replay_verify_session(session_id.strip())
 
-            if status == "VERIFIED":
+            # Presentación del reporte completo (audit-friendly)
+            st.markdown("### 📄 Informe de verificación")
+            st.json(report.__dict__)
+
+            # Evaluación semántica
+            if report.matches:
                 st.success(
-                    "VERIFIED ✅ Coincide base de datos vs motor determinista PRO "
-                    "(winner + inputs_hash + proof_hash)."
-                )
-            elif status == "NO_STORED_ADJUDICATION":
-                st.warning(
-                    "No existe adjudicación almacenada para esta sesión. "
-                    "El resultado mostrado es solo el recalculado."
+                    "VERIFIED ✅\n\n"
+                    "La adjudicación almacenada coincide exactamente con el replay del motor "
+                    "determinista PRO (awarded, hashes, ranking, versión de algoritmo)."
                 )
             else:
                 st.error(
-                    "MISMATCH ❌ Hay discrepancias entre la adjudicación almacenada "
-                    "y el replay del motor."
+                    f"MISMATCH ❌\n\n"
+                    f"Motivo: {report.reason}\n\n"
+                    "Existe una discrepancia entre la adjudicación persistida "
+                    "y el resultado reproducido por el motor."
                 )
 
         except Exception as e:
@@ -147,7 +153,6 @@ def render_admin_engine():
 
     st.markdown("---")
     st.info(
-        "Este panel no contiene lógica crítica. "
-        "El motor determinista vive fuera del dashboard."
+        "Este panel es exclusivamente de **orquestación y auditoría**.\n\n"
+        "La lógica crítica del motor determinista vive fuera del dashboard."
     )
-
