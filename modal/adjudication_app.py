@@ -1,17 +1,17 @@
 # modal/adjudication_app.py
 
 import modal
-import os
 from datetime import datetime, timezone
+from typing import Dict, Any
 
-# -----------------------------
+# ==========================================================
 # Modal App
-# -----------------------------
+# ==========================================================
 app = modal.App("compra-abierta-adjudication-pro")
 
-# -----------------------------
-# Imagen Modal (Python limpio)
-# -----------------------------
+# ==========================================================
+# Imagen de ejecución
+# ==========================================================
 image = (
     modal.Image.debian_slim()
     .pip_install(
@@ -24,34 +24,40 @@ image = (
     )
 )
 
-# -----------------------------
-# Secrets (Supabase)
-# -----------------------------
+# ==========================================================
+# Secrets (Supabase Service Role)
+# ==========================================================
 secrets = [
     modal.Secret.from_name("supabase-prod"),
 ]
 
-# -----------------------------
-# Function
-# -----------------------------
+# ==========================================================
+# HTTP ENDPOINT
+# ==========================================================
 @app.function(
     image=image,
     secrets=secrets,
     timeout=300,
 )
-def adjudication_worker(limit: int = 10):
+@modal.web_endpoint(method="POST")
+def adjudicate(limit: int = 10) -> Dict[str, Any]:
     """
-    Worker determinista PRO.
-    Ejecuta adjudicaciones pendientes de forma autónoma.
+    Endpoint HTTP para adjudicación determinista PRO.
+
+    Payload opcional:
+    {
+        "limit": 10
+    }
     """
 
-    # ⚠️ IMPORTS DENTRO (Modal best practice)
+    # ⚠️ Imports internos (Modal best practice)
     from backend_core.services.supabase_client import table
     from backend_core.services.adjudication_service import adjudicate_session
     from backend_core.services.audit_repository import log_event
 
     now = datetime.now(timezone.utc).isoformat()
 
+    # Buscar sesiones cerradas pendientes de adjudicar
     resp = (
         table("ca_sessions")
         .select("id, status, closed_at, adjudicated_at")
@@ -65,10 +71,12 @@ def adjudication_worker(limit: int = 10):
 
     processed = []
     skipped = []
+    errors = []
 
     for session in sessions:
         session_id = session["id"]
 
+        # Idempotencia dura
         if session.get("adjudicated_at") is not None:
             skipped.append(session_id)
             continue
@@ -84,6 +92,11 @@ def adjudication_worker(limit: int = 10):
             processed.append(session_id)
 
         except Exception as e:
+            errors.append({
+                "session_id": session_id,
+                "error": str(e),
+            })
+
             log_event(
                 event_type="session_adjudication_failed",
                 session_id=session_id,
@@ -91,8 +104,10 @@ def adjudication_worker(limit: int = 10):
             )
 
     return {
+        "engine": "deterministic_adjudicator_pro",
         "timestamp": now,
+        "processed_count": len(processed),
         "processed": processed,
         "skipped": skipped,
-        "processed_count": len(processed),
+        "errors": errors,
     }
