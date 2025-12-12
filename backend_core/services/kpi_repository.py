@@ -1,7 +1,7 @@
 # backend_core/services/kpi_repository.py
 
 from backend_core.services.supabase_client import table
-from backend_core.services.operator_repository import ensure_country_filter
+from backend_core.services.operator_repository import ensure_country_filter, get_operator
 
 
 # ==========================================================================
@@ -10,78 +10,108 @@ from backend_core.services.operator_repository import ensure_country_filter
 def _count(q):
     try:
         res = q.execute()
-        if isinstance(res, list):
-            return len(res)
-        if isinstance(res, dict) and res.get("data"):
-            return len(res["data"])
+        if hasattr(res, "data") and res.data is not None:
+            return len(res.data)
         return 0
     except Exception:
         return 0
 
 
+def _resolve_countries(operator_id: str, country: str | None):
+    """
+    Si se pasa country → valida permiso.
+    Si NO se pasa → devuelve lista de países permitidos.
+    """
+    if country:
+        c = ensure_country_filter(operator_id, country)
+        return [c] if c else []
+
+    op = get_operator(operator_id)
+    if not op:
+        return []
+
+    if op.get("global_access"):
+        return op.get("allowed_countries", []) or []
+
+    return op.get("allowed_countries", []) or []
+
+
 # ==========================================================================
-# MODERN KPI FUNCTIONS
+# KPI CORE FUNCTIONS
 # ==========================================================================
-def sessions_active(operator_id: str, country: str):
-    c = ensure_country_filter(operator_id, country)
-    if not c: return 0
-    return _count(table("ca_sessions").select("id").eq("country", c).eq("status", "active"))
+def _sessions_by_status(operator_id: str, status: str, country: str | None = None):
+    countries = _resolve_countries(operator_id, country)
+    total = 0
+    for c in countries:
+        total += _count(
+            table("ca_sessions")
+            .select("id")
+            .eq("country", c)
+            .eq("status", status)
+        )
+    return total
 
 
-def sessions_parked(operator_id: str, country: str):
-    c = ensure_country_filter(operator_id, country)
-    if not c: return 0
-    return _count(table("ca_sessions").select("id").eq("country", c).eq("status", "parked"))
+def _simple_count(table_name: str, operator_id: str, country: str | None = None):
+    countries = _resolve_countries(operator_id, country)
+    total = 0
+    for c in countries:
+        total += _count(
+            table(table_name)
+            .select("id")
+            .eq("country", c)
+        )
+    return total
 
 
-def sessions_finished(operator_id: str, country: str):
-    c = ensure_country_filter(operator_id, country)
-    if not c: return 0
-    return _count(table("ca_sessions").select("id").eq("country", c).eq("status", "finished"))
+# ==========================================================================
+# PUBLIC KPI FUNCTIONS (MODERN)
+# ==========================================================================
+def sessions_active(operator_id: str, country: str | None = None):
+    return _sessions_by_status(operator_id, "active", country)
 
 
-def sessions_expired(operator_id: str, country: str):
-    c = ensure_country_filter(operator_id, country)
-    if not c: return 0
-    return _count(table("ca_sessions").select("id").eq("country", c).eq("status", "expired"))
+def sessions_parked(operator_id: str, country: str | None = None):
+    return _sessions_by_status(operator_id, "parked", country)
 
 
-def providers_total(operator_id: str, country: str):
-    c = ensure_country_filter(operator_id, country)
-    if not c: return 0
-    return _count(table("providers_v2").select("id").eq("country", c))
+def sessions_finished(operator_id: str, country: str | None = None):
+    return _sessions_by_status(operator_id, "finished", country)
 
 
-def products_total(operator_id: str, country: str):
-    c = ensure_country_filter(operator_id, country)
-    if not c: return 0
-    return _count(table("products_v2").select("id").eq("country", c))
+def sessions_expired(operator_id: str, country: str | None = None):
+    return _sessions_by_status(operator_id, "expired", country)
 
 
-def categories_total(operator_id: str, country: str):
-    c = ensure_country_filter(operator_id, country)
-    if not c: return 0
-    # categorías están en categories_v2
-    return _count(table("categories_v2").select("id").eq("country", c))
+def providers_total(operator_id: str, country: str | None = None):
+    return _simple_count("providers_v2", operator_id, country)
 
 
-def wallets_total(operator_id: str, country: str):
+def products_total(operator_id: str, country: str | None = None):
+    return _simple_count("products_v2", operator_id, country)
+
+
+def categories_total(operator_id: str, country: str | None = None):
+    return _simple_count("categories_v2", operator_id, country)
+
+
+def wallets_total(operator_id: str, country: str | None = None):
     return 0  # AÚN NO IMPLEMENTADO
 
 
 # ==========================================================================
 # LEGACY WRAPPERS (COMPATIBILIDAD TOTAL)
 # ==========================================================================
-def get_kpi_sessions_active(o, c): return sessions_active(o, c)
-def get_kpi_sessions_parked(o, c): return sessions_parked(o, c)
-def get_kpi_sessions_finished(o, c): return sessions_finished(o, c)
-def get_kpi_sessions_expired(o, c): return sessions_expired(o, c)
+def get_kpi_sessions_active(o, c=None): return sessions_active(o, c)
+def get_kpi_sessions_parked(o, c=None): return sessions_parked(o, c)
+def get_kpi_sessions_finished(o, c=None): return sessions_finished(o, c)
+def get_kpi_sessions_expired(o, c=None): return sessions_expired(o, c)
 
-def get_kpi_providers_total(o, c): return providers_total(o, c)
-def get_kpi_products_total(o, c): return products_total(o, c)
-def get_kpi_categories_total(o, c): return categories_total(o, c)
+def get_kpi_providers_total(o, c=None): return providers_total(o, c)
+def get_kpi_products_total(o, c=None): return products_total(o, c)
+def get_kpi_categories_total(o, c=None): return categories_total(o, c)
 
-def get_kpi_wallets_total(o, c): return wallets_total(o, c)
+def get_kpi_wallets_total(o, c=None): return wallets_total(o, c)
 
-# Alias antiguos usados por Operator Dashboard Pro
-def wallet_deposit_ok(o, c): return wallets_total(o, c)
+# Alias antiguos
+def wallet_deposit_ok(o, c=None): return wallets_total(o, c)
