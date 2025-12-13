@@ -25,13 +25,19 @@ def diagnostic_imports():
         "Session Chains": ("chains", "render_session_chains"),
         "Session History": ("history_sessions", "render_history_sessions"),
         "Audit Logs": ("audit_logs", "render_audit_logs"),
+
         "Product Catalog Pro": ("product_catalog_pro", "render_product_catalog_pro"),
         "Product Details Pro": ("product_details_pro", "render_product_details_pro"),
         "Product Creator Pro": ("product_creator_pro", "render_product_creator_pro"),
         "Category Manager Pro": ("category_manager_pro", "render_category_manager_pro"),
         "Provider Manager Pro": ("provider_manager_pro", "render_provider_manager_pro"),
         "Products Browser": ("products_browser", "render_products_browser"),
+
         "Engine Monitor": ("engine_monitor", "render_engine_monitor"),
+
+        # ✅ NUEVO: Showcases (admin)
+        "Showcases": ("showcases", "render_showcases"),
+
         "Admin Seeds": ("admin_seeds", "render_admin_seeds"),
         "Admin Series": ("admin_series", "render_admin_series"),
         "Admin Users": ("admin_users", "render_admin_users"),
@@ -74,13 +80,19 @@ def render_page(page: str):
         "Session Chains": safe_import("chains", "render_session_chains"),
         "Session History": safe_import("history_sessions", "render_history_sessions"),
         "Audit Logs": safe_import("audit_logs", "render_audit_logs"),
+
         "Product Catalog Pro": safe_import("product_catalog_pro", "render_product_catalog_pro"),
         "Product Details Pro": safe_import("product_details_pro", "render_product_details_pro"),
         "Product Creator Pro": safe_import("product_creator_pro", "render_product_creator_pro"),
         "Category Manager Pro": safe_import("category_manager_pro", "render_category_manager_pro"),
         "Provider Manager Pro": safe_import("provider_manager_pro", "render_provider_manager_pro"),
         "Products Browser": safe_import("products_browser", "render_products_browser"),
+
         "Engine Monitor": safe_import("engine_monitor", "render_engine_monitor"),
+
+        # ✅ NUEVO: Showcases (admin)
+        "Showcases": safe_import("showcases", "render_showcases"),
+
         "Admin Seeds": safe_import("admin_seeds", "render_admin_seeds"),
         "Admin Series": safe_import("admin_series", "render_admin_series"),
         "Admin Users": safe_import("admin_users", "render_admin_users"),
@@ -139,6 +151,10 @@ def main():
             "Provider Manager Pro",
             "Products Browser",
             "Engine Monitor",
+
+            # ✅ NUEVO: Showcases
+            "Showcases",
+
             "Admin Seeds",
             "Admin Series",
             "Admin Users",
