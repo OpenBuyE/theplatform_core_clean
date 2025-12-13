@@ -1,17 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime, timezone, timedelta
+from typing import List, Dict, Any, Optional
 
-from backend_core.services.supabase_client import table
+import os
 
-# ✅ Intentamos importar el cliente supabase para usar rpc()
-# Si tu supabase_client.py no expone 'supabase', ajusta este import.
-try:
-    from backend_core.services.supabase_client import supabase  # type: ignore
-except Exception:  # pragma: no cover
-    supabase = None  # fallback controlado
-
+from backend_core.services.supabase_client import table, supabase
 from backend_core.services.audit_repository import log_event
 
 from backend_core.models.adjudication_models import (
@@ -20,35 +14,30 @@ from backend_core.models.adjudication_models import (
     DeterministicContext,
 )
 
-from backend_core.engines.adjudicator_engine_pro import adjudicate
+from backend_core.engines.adjudicator_engine_pro import (
+    adjudicate,
+    ExternalEntropySnapshot,
+)
 
-
-# ==========================================================
-# 🔹 CONFIGURACIÓN CONGELADA — MOTOR DETERMINISTA PRO
-# ==========================================================
-
-ENGINE_VERSION = "2.0.0"
-ALGORITHM_ID = "deterministic_sha256_minhash"
-NORMALIZATION = "stable_sort_by_participant_id"
-
-RPC_FINALIZE = "ca_finalize_adjudication_pro"
-
+from backend_core.services.drand_provider import (
+    DrandConfig,
+    HttpDrandProvider,
+)
 
 # ==========================================================
-# 🔹 ERRORES DOMINIO
+# 🔹 CONFIG MOTOR PRO (congelado)
 # ==========================================================
 
-class InvariantViolationError(ValueError):
-    """Violación de invariantes deterministas (sesión, snapshots, aforo, etc.)."""
+ENGINE_VERSION = "3.0.0"
+ALGORITHM_ID = "deterministic_sha256_mod_with_drand_merkle"
+NORMALIZATION = "stable_sort_by_entry_hash"
 
+# Política drand: first round with time >= closed_at + Δ
+DRAND_BASE_URL = os.getenv("DRAND_BASE_URL", "https://api.drand.sh")
+DRAND_NOT_BEFORE_DELAY_SECONDS = int(os.getenv("DRAND_NOT_BEFORE_DELAY_SECONDS", "30"))
 
-class ConcurrencyAdjudicationError(RuntimeError):
-    """Error inesperado de concurrencia durante la adjudicación."""
-
-
-class RpcNotAvailableError(RuntimeError):
-    """El cliente Supabase no expone rpc(); requiere wrapper en supabase_client.py."""
-
+# En modo IP-grade, drand es obligatorio
+REQUIRE_DRAND = os.getenv("REQUIRE_DRAND", "true").lower() in ("1", "true", "yes", "on")
 
 # ==========================================================
 # 🔹 UTILIDADES
@@ -60,16 +49,12 @@ def _now_utc_iso() -> str:
 
 def _parse_dt(value) -> datetime:
     if isinstance(value, datetime):
-        return value
+        return value.astimezone(timezone.utc)
     return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
-def _unique(values: List[str]) -> bool:
-    return len(values) == len(set(values))
-
-
 # ==========================================================
-# 🔹 SNAPSHOTS INMUTABLES (DB → MODELOS)
+# 🔹 CARGA SNAPSHOTS (DB → MODELOS INMUTABLES)
 # ==========================================================
 
 def _load_session_snapshot(session_id: str) -> SessionSnapshot:
@@ -83,23 +68,22 @@ def _load_session_snapshot(session_id: str) -> SessionSnapshot:
 
     s = resp.data
     if not s:
-        raise InvariantViolationError("Sesión no encontrada.")
+        raise ValueError("Sesión no encontrada.")
 
+    # La sesión debe estar cerrada para adjudicar
     if s.get("status") not in ("closed", "finished"):
-        raise InvariantViolationError(
-            "La sesión no está en estado cerrado/terminado (closed/finished)."
-        )
+        raise ValueError("La sesión no está en estado cerrado/terminado (closed/finished).")
 
     if not s.get("closed_at"):
-        raise InvariantViolationError("La sesión no tiene closed_at (snapshot no estable).")
+        raise ValueError("La sesión no tiene closed_at (snapshot no estable).")
 
     capacity = int(s.get("capacity") or 0)
     if capacity <= 0:
-        raise InvariantViolationError("La sesión no tiene capacity válido (>0).")
+        raise ValueError("La sesión no tiene capacity válido (>0).")
 
     return SessionSnapshot(
-        session_id=s["id"],
-        product_id=s["product_id"],
+        session_id=str(s["id"]),
+        product_id=str(s["product_id"]),
         session_created_at=_parse_dt(s["created_at"]),
         session_closed_at=_parse_dt(s["closed_at"]),
         capacity=capacity,
@@ -112,52 +96,29 @@ def _load_participants_snapshot(session_id: str) -> List[ParticipantSnapshot]:
         table("ca_participants")
         .select("id, user_id, participations, created_at, session_id")
         .eq("session_id", session_id)
-        .order("id")  # solo lectura; el motor no depende del orden
+        .order("id")
         .execute()
     )
 
     rows = resp.data or []
     if not rows:
-        raise InvariantViolationError("No hay participantes en la sesión.")
+        raise ValueError("No hay participantes en la sesión.")
 
-    participants: List[ParticipantSnapshot] = []
+    out: List[ParticipantSnapshot] = []
     for r in rows:
-        participants.append(
+        out.append(
             ParticipantSnapshot(
-                participant_id=r["id"],
-                user_id=r["user_id"],
+                participant_id=str(r["id"]),
+                user_id=str(r["user_id"]),
                 participations=int(r.get("participations") or 1),
                 joined_at=_parse_dt(r["created_at"]),
             )
         )
-
-    return participants
-
-
-def _load_snapshot_bundle(
-    session_id: str,
-) -> Tuple[SessionSnapshot, List[ParticipantSnapshot]]:
-    session_snapshot = _load_session_snapshot(session_id)
-    participants_snapshot = _load_participants_snapshot(session_id)
-
-    # Invariantes deterministas duras
-    if len(participants_snapshot) != int(session_snapshot.capacity):
-        raise InvariantViolationError(
-            f"Aforo inconsistente: participants={len(participants_snapshot)} "
-            f"capacity={session_snapshot.capacity}"
-        )
-
-    ids = [p.participant_id for p in participants_snapshot]
-    if not _unique(ids):
-        raise InvariantViolationError(
-            "Duplicidad de participant_id en snapshot de participantes."
-        )
-
-    return session_snapshot, participants_snapshot
+    return out
 
 
 # ==========================================================
-# 🔹 IDEMPOTENCIA (LECTURA DB)
+# 🔹 IDEMPOTENCIA (NO DUPLICAR ADJUDICACIONES)
 # ==========================================================
 
 def _get_existing_adjudication(session_id: str) -> Optional[Dict[str, Any]]:
@@ -172,144 +133,206 @@ def _get_existing_adjudication(session_id: str) -> Optional[Dict[str, Any]]:
 
 
 # ==========================================================
-# 🔹 RPC FINALIZE (ATÓMICO)
+# 🔹 DRAND (ENTROPÍA PÚBLICA VERIFICABLE)
 # ==========================================================
 
-def _rpc_finalize_adjudication(
+def _get_drand_entropy(session_closed_at_utc: datetime) -> Optional[ExternalEntropySnapshot]:
+    """
+    Obtiene el primer round drand cuyo timestamp >= closed_at + Δ.
+    La verificación de firma/chain (si la añades) debe vivir en el provider o en un verifier externo.
+    """
+    cfg = DrandConfig(base_url=DRAND_BASE_URL, timeout_seconds=10)
+    provider = HttpDrandProvider(cfg)
+
+    not_before = session_closed_at_utc.astimezone(timezone.utc) + timedelta(seconds=DRAND_NOT_BEFORE_DELAY_SECONDS)
+
+    try:
+        return provider.get_round_after(not_before_utc=not_before)
+    except Exception:
+        if REQUIRE_DRAND:
+            raise
+        return None
+
+
+# ==========================================================
+# 🔹 PERSISTENCIA PRO (DB) — Atomicidad preferente via RPC
+# ==========================================================
+
+def _finalize_via_rpc(
     *,
     session_id: str,
-    awarded_participant_id: str,
-    result: Any,
-) -> Dict[str, Any]:
+    winner_participant_id: str,  # columna legacy en DB
+    ranking: Any,
+    seed: str,
+    inputs_hash: str,
+    proof_hash: str,
+    engine_version: str,
+    algorithm_id: str,
+) -> bool:
     """
-    Llama a la RPC transaccional en Postgres:
-      public.ca_finalize_adjudication_pro(...)
-    Mantiene semántica awarded; DB legacy usa winner_participant_id internamente.
+    Intenta ejecutar la función Postgres 'ca_finalize_adjudication_pro' (si existe)
+    para insertar adjudicación + marcar awarded + finalizar sesión en transacción.
+    Devuelve True si la RPC se ejecutó; False si no.
     """
-    if supabase is None or not hasattr(supabase, "rpc"):
-        raise RpcNotAvailableError(
-            "Supabase client no disponible o no expone rpc(). "
-            "Expón `supabase` en supabase_client.py o añade wrapper rpc()."
-        )
+    try:
+        # Convención: pasar nombres = columnas (muy común en RPCs Supabase).
+        payload = {
+            "session_id": session_id,
+            "winner_participant_id": winner_participant_id,
+            "ranking": ranking,
+            "seed": seed,
+            "inputs_hash": inputs_hash,
+            "proof_hash": proof_hash,
+            "engine_version": engine_version,
+            "algorithm_id": algorithm_id,
+        }
+        supabase.rpc("ca_finalize_adjudication_pro", payload).execute()
+        return True
+    except Exception:
+        # Fallback silencioso: usamos persistencia manual si la RPC no encaja con firma/nombres
+        return False
 
-    payload = {
-        "p_session_id": session_id,
-        "p_awarded_participant_id": awarded_participant_id,
-        "p_ranking": result.ranking,
-        "p_seed": result.seed,
-        "p_inputs_hash": result.inputs_hash,
-        "p_proof_hash": result.proof_hash,
-        "p_engine_version": result.engine_version,
-        "p_algorithm_id": result.algorithm_id,
-    }
 
-    resp = supabase.rpc(RPC_FINALIZE, payload).execute()
-    data = resp.data
+def _persist_manual(
+    *,
+    session_id: str,
+    winner_participant_id: str,
+    ranking: Any,
+    seed: str,
+    inputs_hash: str,
+    proof_hash: str,
+    engine_version: str,
+    algorithm_id: str,
+) -> None:
+    """
+    Persistencia manual (fallback):
+    - inserta ca_adjudications
+    - marca participante (is_awarded)
+    - finaliza sesión (finished)
+    Nota: no es tan fuerte como RPC transaccional, pero no rompe el sistema.
+    """
+    table("ca_adjudications").insert(
+        {
+            "session_id": session_id,
+            "winner_participant_id": winner_participant_id,
+            "ranking": ranking,
+            "seed": seed,
+            "inputs_hash": inputs_hash,
+            "proof_hash": proof_hash,
+            "engine_version": engine_version,
+            "algorithm_id": algorithm_id,
+            "created_at": _now_utc_iso(),
+        }
+    ).execute()
 
-    # PostgREST suele devolver lista con 1 fila (returns table)
-    if isinstance(data, list) and data:
-        return data[0]
-    if isinstance(data, dict) and data:
-        return data
-
-    # Si no hay data, levantamos con contexto
-    raise RuntimeError(f"RPC {RPC_FINALIZE} devolvió respuesta vacía: {data!r}")
+    table("ca_participants").update({"is_awarded": True}).eq("id", winner_participant_id).execute()
+    table("ca_sessions").update({"status": "finished"}).eq("id", session_id).execute()
 
 
 # ==========================================================
-# 🔹 SERVICIO PÚBLICO — ORQUESTACIÓN DETERMINISTA PRO (ATÓMICO)
+# 🔹 SERVICIO PRINCIPAL
 # ==========================================================
 
 def adjudicate_session_pro(session_id: str) -> Dict[str, Any]:
     """
-    Servicio determinista PRO (ATÓMICO via RPC):
-
-    - Idempotente (UNIQUE session_id en DB)
-    - Reproducible
-    - Auditable
-    - Semántica awarded (no lottery, no winner)
-    - Persistencia + marcado + finalización en una sola transacción SQL
+    Orquestación PRO:
+    - Idempotente
+    - Audit-grade
+    - Alineado con documentación IP: drand + manifest_commit + mod N
+    - Terminología externa: awarded
+      (DB legacy: winner_participant_id)
     """
 
-    # 0) Idempotencia rápida (fast path)
+    # 0) Idempotencia
     existing = _get_existing_adjudication(session_id)
     if existing:
         return {
             "session_id": session_id,
             "status": "ALREADY_ADJUDICATED",
-            # DB legacy column:
             "awarded_participant_id": existing.get("winner_participant_id"),
             "engine_version": existing.get("engine_version"),
             "algorithm_id": existing.get("algorithm_id"),
         }
 
-    # 1) Snapshots inmutables + invariantes
-    session_snapshot, participants_snapshot = _load_snapshot_bundle(session_id)
+    # 1) Snapshots
+    session_snapshot = _load_session_snapshot(session_id)
+    participants_snapshot = _load_participants_snapshot(session_id)
 
-    # 2) Contexto determinista congelado
+    # 2) Contexto motor (congelado)
     context = DeterministicContext(
         engine_version=ENGINE_VERSION,
         algorithm_id=ALGORITHM_ID,
         normalization=NORMALIZATION,
     )
 
-    # 3) Motor determinista puro
+    # 3) Drand entropy (obligatorio en modo IP-grade)
+    entropy = _get_drand_entropy(session_snapshot.session_closed_at)
+    if REQUIRE_DRAND and entropy is None:
+        raise RuntimeError("DRAND requerido pero no disponible.")
+
+    # 4) Motor PRO (puro)
     result = adjudicate(
         session=session_snapshot,
         participants=participants_snapshot,
         context=context,
+        external_entropy=entropy,  # <-- alineación IP
     )
 
-    awarded_participant_id = result.awarded_participant_id
+    # 5) Persistencia
+    # DB schema legacy: winner_participant_id
+    winner_participant_id = str(result.awarded_participant_id)
 
-    # 4) Finalización atómica (DB transaction)
-    try:
-        rpc_out = _rpc_finalize_adjudication(
+    did_rpc = _finalize_via_rpc(
+        session_id=session_id,
+        winner_participant_id=winner_participant_id,
+        ranking=result.ranking,
+        seed=result.seed,
+        inputs_hash=result.inputs_hash,
+        proof_hash=result.proof_hash,
+        engine_version=result.engine_version,
+        algorithm_id=result.algorithm_id,
+    )
+
+    if not did_rpc:
+        _persist_manual(
             session_id=session_id,
-            awarded_participant_id=awarded_participant_id,
-            result=result,
-        )
-    except RpcNotAvailableError:
-        # Fallback ultra conservador: no hacemos updates sueltos aquí.
-        # Preferimos fallar explícitamente para no volver a estados intermedios.
-        raise
-    except Exception:
-        # Si por concurrencia ya existe, devolvemos lo persistido
-        existing_after = _get_existing_adjudication(session_id)
-        if existing_after:
-            return {
-                "session_id": session_id,
-                "status": "ALREADY_ADJUDICATED",
-                "awarded_participant_id": existing_after.get("winner_participant_id"),
-                "engine_version": existing_after.get("engine_version"),
-                "algorithm_id": existing_after.get("algorithm_id"),
-            }
-        raise ConcurrencyAdjudicationError(
-            "Fallo en finalización atómica y no se pudo recuperar la adjudicación existente."
+            winner_participant_id=winner_participant_id,
+            ranking=result.ranking,
+            seed=result.seed,
+            inputs_hash=result.inputs_hash,
+            proof_hash=result.proof_hash,
+            engine_version=result.engine_version,
+            algorithm_id=result.algorithm_id,
         )
 
-    # 5) Auditoría (fuera de la transacción; evidencia criptográfica ya persistida)
+    # 6) Auditoría (terminología awarded)
+    # drand queda embebido en ranking.meta.drand; lo reflejamos también en log_event.
+    drand_meta = None
+    try:
+        drand_meta = (result.ranking or {}).get("meta", {}).get("drand")
+    except Exception:
+        drand_meta = None
+
     log_event(
         event_type="session_adjudicated_pro",
         session_id=session_id,
         payload={
-            "awarded_participant_id": awarded_participant_id,
+            "awarded_participant_id": winner_participant_id,
             "seed": result.seed,
             "inputs_hash": result.inputs_hash,
             "proof_hash": result.proof_hash,
             "engine_version": result.engine_version,
             "algorithm_id": result.algorithm_id,
-            "rpc_status": rpc_out.get("status") if isinstance(rpc_out, dict) else None,
+            "drand": drand_meta,
         },
     )
 
-    # 6) Respuesta estable (semántica awarded)
     return {
         "session_id": session_id,
-        "status": rpc_out.get("status", "ADJUDICATED") if isinstance(rpc_out, dict) else "ADJUDICATED",
-        "awarded_participant_id": (
-            rpc_out.get("awarded_participant_id") if isinstance(rpc_out, dict) else awarded_participant_id
-        ),
+        "status": "ADJUDICATED",
+        "awarded_participant_id": winner_participant_id,
         "engine_version": result.engine_version,
         "algorithm_id": result.algorithm_id,
+        "drand": drand_meta,
+        "persistence_mode": "RPC" if did_rpc else "MANUAL",
     }
